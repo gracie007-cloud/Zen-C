@@ -1,7 +1,7 @@
 
 <div align="center">
 
-[English](README.md) • [简体中文](README_ZH_CN.md) • [繁體中文](README_ZH_TW.md) • [Español](README_ES.md) • [Italiano](README_IT.md)
+[English](README.md) • [Русский](README_RU.md) • [简体中文](README_ZH_CN.md) • [繁體中文](README_ZH_TW.md) • [Español](README_ES.md) • [Italiano](README_IT.md)
 
 </div>
 
@@ -100,6 +100,7 @@
         - [Restricciones con Nombre](#restricciones-con-nombre)
     - [15. Directivas de Construcción](#15-directivas-de-construcción)
     - [16. Palabras Clave](#16-palabras-clave)
+    - [17. Interoperabilidad C](#17-interoperabilidad-c)
 - [Biblioteca Estándar](#biblioteca-estándar)
 - [Herramientas](#herramientas)
     - [Servidor de Lenguaje (LSP)](#servidor-de-lenguaje-lsp)
@@ -203,7 +204,11 @@ let y: const int = 10;  // Solo lectura (Calificado por tipo)
 
 | Tipo | Equivalente en C | Descripción |
 |:---|:---|:---|
-| `int`, `uint` | `int`, `unsigned int` | Entero estándar de la plataforma |
+| `int`, `uint` | `int32_t`, `uint32_t` | Entero de 32 bits con signo/sin signo |
+| `c_char`, `c_uchar` | `char`, `unsigned char` | C char (Interoperabilidad) |
+| `c_short`, `c_ushort` | `short`, `unsigned short` | C short (Interoperabilidad) |
+| `c_int`, `c_uint` | `int`, `unsigned int` | C int (Interoperabilidad) |
+| `c_long`, `c_ulong` | `long`, `unsigned long` | C long (Interoperabilidad) |
 | `I8` .. `I128` o `i8` .. `i128` | `int8_t` .. `__int128_t` | Enteros con signo de ancho fijo |
 | `U8` .. `U128` o `u8` .. `u128` | `uint8_t` .. `__uint128_t` | Enteros sin signo de ancho fijo |
 | `isize`, `usize` | `ptrdiff_t`, `size_t` | Enteros del tamaño de un puntero |
@@ -215,6 +220,12 @@ let y: const int = 10;  // Solo lectura (Calificado por tipo)
 | `U0`, `u0`, `void` | `void` | Tipo vacío |
 | `iN` (ej. `i256`) | `_BitInt(N)` | Entero con signo de ancho arbitrario (C23) |
 | `uN` (ej. `u42`) | `unsigned _BitInt(N)` | Entero sin signo de ancho arbitrario (C23) |
+
+> **Mejores Prácticas para Código Portable**
+>
+> - Usa **Tipos Portables** (`int`, `uint`, `i64`, `u8`, etc.) para toda la lógica pura de Zen C. `int` garantiza ser 32-bits con signo en todas las arquitecturas.
+> - Usa **Tipos de Interoperabilidad C** (`c_int`, `c_char`, `c_long`) **sólo** al interactuar con bibliotecas C (FFI). Su tamaño varía según la plataforma y el compilador C.
+> - Usa `isize` y `usize` para indexado de arrays y aritmética de punteros.
 
 ### 3. Tipos Agregados
 
@@ -464,9 +475,9 @@ match val {
 
 // Desestructuración de Enums
 match shape {
-    Shape::Circle(r)   => println "Radio: {r}",
-    Shape::Rect(w, h)  => println "Área: {w*h}",
-    Shape::Point       => println "Punto"
+    Shape::Circle(r)   => { println "Radio: {r}" },
+    Shape::Rect(w, h)  => { println "Área: {w*h}" },
+    Shape::Point       => { println "Punto" },
 }
 ```
 
@@ -997,12 +1008,13 @@ Zen C simplifica la compleja sintaxis de restricciones de GCC con vinculaciones 
 // Sintaxis: : out(variable) : in(variable) : clobber(reg)
 // Usa la sintaxis de marcador de posición {variable} para legibilidad
 
-fn sumar(a: int, b: int) -> int {
+fn sumar(x: int) -> int {
     let resultado: int;
     asm {
-        "add {resultado}, {a}, {b}"
+        "mov {x}, {resultado}"
+        "add $5, {resultado}"
         : out(resultado)
-        : in(a), in(b)
+        : in(x)
         : clobber("cc")
     }
     return resultado;
@@ -1090,6 +1102,50 @@ Los siguientes identificadores están reservados porque son palabras clave en C1
 
 #### Operadores
 `and`, `or`
+
+### 17. Interoperabilidad C
+Zen C ofrece dos formas de interactuar con código C: **Importaciones de Confianza** (Conveniente) y **FFI Explícita** (Seguro/Preciso).
+
+#### Método 1: Importaciones de Confianza (Conveniente)
+
+Puedes importar una cabecera C directamente usando la palabra clave `import` con la extensión `.h`. Esto trata la cabecera como un módulo y asume que todos los símbolos accedidos existen.
+
+```zc
+//> link: -lm
+import "math.h" as c_math;
+
+fn main() {
+    // El compilador confía en la corrección; emite 'cos(...)' directamente
+    let x = c_math::cos(3.14159);
+}
+```
+
+> **Pros**: Cero código repetitivo. Acceso a todo el contenido de la cabecera inmediato.
+> **Cons**: Sin seguridad de tipos desde Zen C (errores capturados por el compilador C después).
+
+#### Método 2: FFI Explícita (Seguro)
+
+Para una comprobación estricta de tipos o cuando no quieres incluir el texto de una cabecera, usa `extern fn`.
+
+```zc
+include <stdio.h> // Emite #include <stdio.h> en el C generado
+
+// Define firma estricta
+extern fn printf(fmt: char*, ...) -> c_int;
+
+fn main() {
+    printf("Hola FFI: %d\n", 42); // Comprobado por tipos por Zen C
+}
+```
+
+> **Pros**: Zen C asegura que los tipos coincidan.
+> **Cons**: Requiere declaración manual de funciones.
+
+#### `import` vs `include`
+
+- **`import "file.h"`**: Registra la cabecera como un módulo con nombre. Habilita el acceso implícito a símbolos (ej. `file::function()`).
+- **`include <file.h>`**: Puramente emite `#include <file.h>` en el código C generado. No introduce ningún símbolo al compilador de Zen C; debes usar `extern fn` para acceder a ellos.
+
 
 ---
 
