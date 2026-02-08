@@ -319,6 +319,8 @@ struct ParserContext
     // Config/State
     char *current_impl_struct;     ///< Name of struct currently being implemented (in impl block).
     ASTNode *current_impl_methods; ///< Head of method list for current impl block.
+    int in_method_with_self;       ///< 1 if parsing body of method with self parameter.
+    int self_is_pointer;           ///< 1 if self is a pointer receiver (self*).
 
     // Internal tracking
     DeprecatedFunc *deprecated_funcs; ///< Registry of deprecated functions.
@@ -455,6 +457,11 @@ ZenSymbol *find_symbol_entry(ParserContext *ctx, const char *n);
  */
 ZenSymbol *find_symbol_in_all(ParserContext *ctx, const char *n);
 char *find_similar_symbol(ParserContext *ctx, const char *name);
+
+/**
+ * @brief Normalizes a type name (e.g., "int" -> "int32_t").
+ */
+const char *normalize_type_name(const char *name);
 
 // Function registry
 

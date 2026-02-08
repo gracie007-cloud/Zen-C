@@ -2100,7 +2100,26 @@ ASTNode *parse_macro_call(ParserContext *ctx, Lexer *l, char *macro_name)
 
 ASTNode *parse_statement(ParserContext *ctx, Lexer *l)
 {
+    int prev_emit = l->emit_comments;
+    if (g_config.keep_comments)
+    {
+        l->emit_comments = 1;
+    }
     Token tk = lexer_peek(l);
+    l->emit_comments = prev_emit;
+
+    if (tk.type == TOK_COMMENT)
+    {
+        l->emit_comments = 1;
+        lexer_next(l); // consume comment
+        l->emit_comments = prev_emit;
+
+        ASTNode *node = ast_create(NODE_COMMENT);
+        node->comment.content = xmalloc(tk.len + 1);
+        strncpy(node->comment.content, tk.start, tk.len);
+        node->comment.content[tk.len] = 0;
+        return node;
+    }
 
     ASTNode *s = NULL;
 
@@ -2347,6 +2366,7 @@ ASTNode *parse_statement(ParserContext *ctx, Lexer *l)
         if (strncmp(tk.start, "var", 3) == 0 && tk.len == 3)
         {
             zpanic_at(tk, "'var' is deprecated. Use 'let' instead.");
+            return parse_var_decl(ctx, l);
         }
 
         // Static local variable: static let x = 0;
@@ -2737,6 +2757,10 @@ ASTNode *parse_statement(ParserContext *ctx, Lexer *l)
 
     // Default: Expression Statement
     s = parse_expression(ctx, l);
+    if (!s)
+    {
+        return NULL;
+    }
 
     int has_semi = 0;
     if (lexer_peek(l).type == TOK_SEMICOLON)
@@ -2817,12 +2841,6 @@ ASTNode *parse_block(ParserContext *ctx, Lexer *l)
         if (tk.type == TOK_EOF)
         {
             break;
-        }
-
-        if (unreachable == 1)
-        {
-            warn_unreachable_code(tk);
-            unreachable = 2; // Warned once, don't spam
         }
 
         if (tk.type == TOK_COMPTIME)
@@ -3254,7 +3272,19 @@ ASTNode *parse_import(ParserContext *ctx, Lexer *l)
     char *src = load_file(fn);
     if (!src)
     {
-        zpanic_at(t, "Not found: %s", fn);
+        if (!src)
+        {
+            if (g_config.mode_lsp)
+            {
+                // In LSP mode, just warn and return error node or similar
+                // For now, let's return a dummy ERROR node or NULL to avoid crashing
+                zwarn_at(t, "LSP: Import not found: %s", fn);
+                ASTNode *dummy = ast_create(NODE_BLOCK);
+                dummy->block.statements = NULL;
+                return dummy;
+            }
+            zpanic_at(t, "Not found: %s", fn);
+        }
     }
 
     Lexer i;
@@ -3381,6 +3411,24 @@ char *run_comptime_block(ParserContext *ctx, Lexer *l)
         f,
         "size_t _z_check_bounds(size_t index, size_t size) { if (index >= size) { fprintf(stderr, "
         "\"Index out of bounds: %%zu >= %%zu\\n\", index, size); exit(1); } return index; }\n");
+
+    // Comptime helper functions
+    fprintf(f, "void yield(const char* s) { printf(\"%%s\", s); }\n");
+    fprintf(f, "void code(const char* s) { printf(\"%%s\", s); }\n"); // Alias for yield
+    fprintf(f, "void compile_error(const char* s) { "
+               "fprintf(stderr, \"Compile-time error: %%s\\n\", s); exit(1); }\n");
+    fprintf(f, "void compile_warn(const char* s) { "
+               "fprintf(stderr, \"Compile-time warning: %%s\\n\", s); }\n");
+
+    // Build metadata constants
+#ifdef _WIN32
+    fprintf(f, "#define __COMPTIME_TARGET__ \"windows\"\n");
+#elif defined(__APPLE__)
+    fprintf(f, "#define __COMPTIME_TARGET__ \"macos\"\n");
+#else
+    fprintf(f, "#define __COMPTIME_TARGET__ \"linux\"\n");
+#endif
+    fprintf(f, "#define __COMPTIME_FILE__ \"%s\"\n", g_current_filename);
 
     ASTNode *curr = nodes;
     ASTNode *stmts = NULL;

@@ -4,7 +4,9 @@
 #include "repl/repl.h"
 #include "zen/zen_facts.h"
 #include "zprep.h"
+#include "analysis/typecheck.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -41,15 +43,19 @@ void print_usage()
     printf("  --version       Print version information\n");
     printf("  -o <file>       Output executable name\n");
     printf("  --emit-c        Keep generated C file (out.c)\n");
+    printf("  --keep-comments Preserve comments in output C file\n");
     printf("  --freestanding  Freestanding mode (no stdlib)\n");
     printf("  --cc <compiler> C compiler to use (gcc, clang, tcc, zig)\n");
     printf("  -O<level>       Optimization level\n");
     printf("  -g              Debug info\n");
     printf("  -v, --verbose   Verbose output\n");
     printf("  -q, --quiet     Quiet output\n");
+    printf("  --json          Emit diagnostics as JSON objects\n");
+    printf("  --no-typecheck  Disable semantic analysis (Typecheck)\n");
     printf("  --no-zen        Disable Zen facts\n");
     printf("  -c              Compile only (produce .o)\n");
     printf("  --cpp           Use C++ mode.\n");
+    printf("  --objective-c   Use Objective-C mode.\n");
     printf("  --cuda          Use CUDA mode (requires nvcc).\n");
 }
 
@@ -140,6 +146,14 @@ int main(int argc, char **argv)
         {
             g_config.emit_c = 1;
         }
+        else if (strcmp(arg, "--json") == 0)
+        {
+            g_config.json_output = 1;
+        }
+        else if (strcmp(arg, "--keep-comments") == 0)
+        {
+            g_config.keep_comments = 1;
+        }
         else if (strcmp(arg, "--version") == 0 || strcmp(arg, "-V") == 0)
         {
             print_version();
@@ -157,6 +171,10 @@ int main(int argc, char **argv)
         {
             g_config.no_zen = 1;
         }
+        else if (strcmp(arg, "--no-typecheck") == 0)
+        {
+            g_config.no_typecheck = 1;
+        }
         else if (strcmp(arg, "--freestanding") == 0)
         {
             g_config.is_freestanding = 1;
@@ -172,7 +190,7 @@ int main(int argc, char **argv)
             g_config.use_cuda = 1;
             g_config.use_cpp = 1; // CUDA implies C++ mode.
         }
-        else if (strcmp(arg, "--objc") == 0)
+        else if (strcmp(arg, "--objc") == 0 || strcmp(arg, "--objective-c") == 0)
         {
             g_config.use_objc = 1;
         }
@@ -273,12 +291,18 @@ int main(int argc, char **argv)
     }
     g_parser_ctx = &ctx;
 
+    z_setup_terminal();
+
+    double start_time = z_get_monotonic_time();
+
     if (!g_config.quiet)
     {
-        printf("[zc] Compiling %s...\n", g_config.input_file);
+        printf(COLOR_BOLD COLOR_GREEN "   Compiling" COLOR_RESET " %s\n", g_config.input_file);
+        fflush(stdout);
     }
 
     ASTNode *root = parse_program(&ctx, &l);
+
     if (!root)
     {
         // Parse failed
@@ -291,9 +315,20 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // Run Semantic Analysis (Type Checker) for all builds unless disabled
+    int tc_result = 0;
+    if (!g_config.no_typecheck)
+    {
+        tc_result = check_program(&ctx, root);
+    }
+
+    // In check mode, exit after type checking
     if (g_config.mode_check)
     {
-        // Just verify
+        if (tc_result != 0)
+        {
+            return 1;
+        }
         printf("Check passed.\n");
         return 0;
     }
@@ -336,14 +371,16 @@ int main(int argc, char **argv)
             }
             if (!g_config.quiet)
             {
-                printf("[zc] Transpiled to %s\n", g_config.output_file);
+                printf(COLOR_BOLD COLOR_CYAN "  Transpiled" COLOR_RESET " to %s\n",
+                       g_config.output_file);
             }
         }
         else
         {
             if (!g_config.quiet)
             {
-                printf("[zc] Transpiled to %s\n", temp_source_file);
+                printf(COLOR_BOLD COLOR_CYAN "  Transpiled" COLOR_RESET " to %s\n",
+                       temp_source_file);
             }
         }
         // Done, no C compilation
@@ -407,6 +444,11 @@ int main(int argc, char **argv)
         {
             sprintf(run_cmd, "./%s", outfile);
         }
+        if (!g_config.quiet)
+        {
+            printf(COLOR_BOLD COLOR_GREEN "     Running" COLOR_RESET " %s\n", outfile);
+            fflush(stdout);
+        }
         ret = system(run_cmd);
         remove(outfile);
         zptr_plugin_mgr_cleanup();
@@ -420,5 +462,25 @@ int main(int argc, char **argv)
 
     zptr_plugin_mgr_cleanup();
     zen_trigger_global();
+
+    double end_time = z_get_monotonic_time();
+    double time_taken = end_time - start_time;
+
+    if (!g_config.quiet && !g_config.mode_run && !g_config.mode_check)
+    {
+        if (g_warning_count > 0)
+        {
+            printf(COLOR_BOLD COLOR_GREEN "    Finished" COLOR_RESET
+                                          " build in %.2fs with %d warning%s\n",
+                   time_taken, g_warning_count, g_warning_count == 1 ? "" : "s");
+        }
+        else
+        {
+            printf(COLOR_BOLD COLOR_GREEN "    Finished" COLOR_RESET " build in %.2fs\n",
+                   time_taken);
+        }
+        fflush(stdout);
+    }
+
     return 0;
 }

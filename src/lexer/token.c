@@ -7,6 +7,7 @@ void lexer_init(Lexer *l, const char *src)
     l->pos = 0;
     l->line = 1;
     l->col = 1;
+    l->emit_comments = 0;
 }
 
 static int is_ident_start(char c)
@@ -77,6 +78,14 @@ Token lexer_next(Lexer *l)
         {
             len++;
         }
+
+        if (l->emit_comments)
+        {
+            l->pos += len;
+            l->col += len;
+            return (Token){TOK_COMMENT, s, len, start_line, start_col};
+        }
+
         l->pos += len;
         l->col += len;
         return lexer_next(l);
@@ -85,6 +94,7 @@ Token lexer_next(Lexer *l)
     // Block Comments.
     if (s[0] == '/' && s[1] == '*')
     {
+        const char *comment_start = s;
         // skip two start chars
         l->pos += 2;
         s += 2;
@@ -112,6 +122,12 @@ Token lexer_next(Lexer *l)
 
             l->pos++;
             s++;
+        }
+
+        if (l->emit_comments)
+        {
+            size_t len = s - comment_start;
+            return (Token){TOK_COMMENT, comment_start, len, start_line, start_col};
         }
 
         return lexer_next(l);
@@ -213,6 +229,13 @@ Token lexer_next(Lexer *l)
             l->pos -= len;
             l->col -= len;
         }
+        // Raw Strings
+        else if (len == 1 && s[0] == 'r' && (s[1] == '"' || s[1] == '\''))
+        {
+            // Reset pos/col because we want to parse string
+            l->pos -= len;
+            l->col -= len;
+        }
         else
         {
             return (Token){TOK_IDENT, s, len, start_line, start_col};
@@ -237,6 +260,32 @@ Token lexer_next(Lexer *l)
         l->pos += len;
         l->col += len;
         return (Token){TOK_FSTRING, s, len, start_line, start_col};
+    }
+
+    // Raw Strings (r"..." or r'...')
+    if (s[0] == 'r' && (s[1] == '"' || s[1] == '\''))
+    {
+        char quote = s[1];
+        int len = 2;
+        // In raw strings, only escape the quote itself
+        while (s[len] && s[len] != quote)
+        {
+            if (s[len] == '\\' && s[len + 1] == quote)
+            {
+                len += 2; // Skip escaped quote
+            }
+            else
+            {
+                len++;
+            }
+        }
+        if (s[len] == quote)
+        {
+            len++;
+        }
+        l->pos += len;
+        l->col += len;
+        return (Token){TOK_RAW_STRING, s, len, start_line, start_col};
     }
 
     // Numbers

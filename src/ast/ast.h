@@ -57,6 +57,8 @@ typedef enum
     TYPE_C_UINT,   ///< `c_uint` (unsigned int).
     TYPE_C_LONG,   ///< `c_long` (long).
     TYPE_C_ULONG,  ///< `c_ulong` (unsigned long).
+    TYPE_C_LONG_LONG,   ///< `c_long_long` (long long).
+    TYPE_C_ULONG_LONG,  ///< `c_ulong_long` (unsigned long long).
     TYPE_C_SHORT,  ///< `c_short` (short).
     TYPE_C_USHORT, ///< `c_ushort` (unsigned short).
     TYPE_C_CHAR,   ///< `c_char` (char).
@@ -171,7 +173,8 @@ typedef enum
     NODE_VA_START,           ///< va_start intrinsic.
     NODE_VA_END,             ///< va_end intrinsic.
     NODE_VA_COPY,            ///< va_copy intrinsic.
-    NODE_VA_ARG              ///< va_arg intrinsic.
+    NODE_VA_ARG,             ///< va_arg intrinsic.
+    NODE_COMMENT             ///< Comment node.
 } NodeType;
 
 // ** AST Node Structure **
@@ -529,6 +532,8 @@ struct ASTNode
         struct
         {
             char **names;
+            char **types;      // Explicit types (NULL entries if inferred)
+            Type **type_infos; // Formal type objects (NULL entries if inferred)
             int count;
             ASTNode *init_expr;
             int is_struct_destruct;
@@ -647,6 +652,11 @@ struct ASTNode
             ASTNode *ap;
             Type *type_info;
         } va_arg;
+
+        struct
+        {
+            char *content;
+        } comment;
     };
 };
 
@@ -658,6 +668,7 @@ Type *type_new(TypeKind kind);
 Type *type_new_ptr(Type *inner);
 int type_eq(Type *a, Type *b);
 int is_integer_type(Type *t);
+int is_float_type(Type *t);
 char *type_to_string(Type *t);
 char *type_to_c_string(Type *t);
 

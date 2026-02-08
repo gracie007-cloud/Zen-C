@@ -111,7 +111,7 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
     if (strcmp(name, "main") == 0)
     {
         ret = "int";
-        ret_type_obj = type_new(TYPE_INT);
+        ret_type_obj = type_new(TYPE_C_INT);
     }
 
     if (lexer_peek(l).type == TOK_ARROW)
@@ -150,7 +150,20 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
     }
     else
     {
+        // Set self context flags for .member shorthand in methods with self
+        int prev_in_method = ctx->in_method_with_self;
+        int prev_self_ptr = ctx->self_is_pointer;
+        if (args && strstr(args, "self"))
+        {
+            ctx->in_method_with_self = 1;
+            ctx->self_is_pointer = (strstr(args, "self*") != NULL);
+        }
+
         body = parse_block(ctx, l);
+
+        // Restore previous state
+        ctx->in_method_with_self = prev_in_method;
+        ctx->self_is_pointer = prev_self_ptr;
     }
 
     // Check for unused parameters
@@ -308,20 +321,38 @@ ASTNode *parse_var_decl(ParserContext *ctx, Lexer *l)
 {
     lexer_next(l); // eat 'var'
 
-    // Destructuring: var {x, y} = ...
+    // Destructuring: var {x, y} = ... OR var (a: type, b: type) = ...
     if (lexer_peek(l).type == TOK_LBRACE || lexer_peek(l).type == TOK_LPAREN)
     {
         int is_struct = (lexer_peek(l).type == TOK_LBRACE);
         lexer_next(l);
         char **names = xmalloc(16 * sizeof(char *));
+        char **types = xmalloc(16 * sizeof(char *));
+        Type **type_infos = xmalloc(16 * sizeof(Type *));
         int count = 0;
         while (1)
         {
             Token t = lexer_next(l);
             char *nm = token_strdup(t);
-            // UPDATE: Pass NULL to add_symbol
-            names[count++] = nm;
-            add_symbol(ctx, nm, "unknown", NULL);
+            names[count] = nm;
+            types[count] = NULL;
+            type_infos[count] = NULL;
+
+            // Check for optional type annotation: name: type
+            if (!is_struct && lexer_peek(l).type == TOK_COLON)
+            {
+                lexer_next(l); // eat :
+                Type *type_obj = parse_type_formal(ctx, l);
+                types[count] = type_to_string(type_obj);
+                type_infos[count] = type_obj;
+                add_symbol(ctx, nm, types[count], type_obj);
+            }
+            else
+            {
+                add_symbol(ctx, nm, "unknown", NULL);
+            }
+            count++;
+
             Token next = lexer_next(l);
             if (next.type == (is_struct ? TOK_RBRACE : TOK_RPAREN))
             {
@@ -343,6 +374,8 @@ ASTNode *parse_var_decl(ParserContext *ctx, Lexer *l)
         }
         ASTNode *n = ast_create(NODE_DESTRUCT_VAR);
         n->destruct.names = names;
+        n->destruct.types = types;
+        n->destruct.type_infos = type_infos;
         n->destruct.count = count;
         n->destruct.init_expr = init;
         n->destruct.is_struct_destruct = is_struct;

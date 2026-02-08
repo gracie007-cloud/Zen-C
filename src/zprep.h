@@ -34,13 +34,7 @@
 #endif
 
 // ** ANSI COLORS **
-#define COLOR_RESET "\033[0m"     ///< Reset color.
-#define COLOR_RED "\033[1;31m"    ///< Red color.
-#define COLOR_GREEN "\033[1;32m"  ///< Green color.
-#define COLOR_YELLOW "\033[1;33m" ///< Yellow color.
-#define COLOR_BLUE "\033[1;34m"   ///< Blue color.
-#define COLOR_CYAN "\033[1;36m"   ///< Cyan color.
-#define COLOR_BOLD "\033[1m"      ///< Bold text.
+#include "utils/colors.h"
 
 // ** MEMORY OVERRIDES (Arena) **
 #define free(ptr) ((void)0)          ///< Free memory.
@@ -56,60 +50,61 @@ extern char *g_current_filename; ///< Current filename.
  */
 typedef enum
 {
-    TOK_EOF = 0,   ///< End of File.
-    TOK_IDENT,     ///< Identifier (variable, function name).
-    TOK_INT,       ///< Integer literal.
-    TOK_FLOAT,     ///< Float literal.
-    TOK_STRING,    ///< String literal.
-    TOK_FSTRING,   ///< Formatted string literal (f"val is {x}").
-    TOK_CHAR,      ///< Character literal.
-    TOK_LPAREN,    ///< (
-    TOK_RPAREN,    ///< )
-    TOK_LBRACE,    ///< {
-    TOK_RBRACE,    ///< }
-    TOK_LBRACKET,  ///< [
-    TOK_RBRACKET,  ///< ]
-    TOK_LANGLE,    ///< <
-    TOK_RANGLE,    ///< >
-    TOK_COMMA,     ///< ,
-    TOK_COLON,     ///< :
-    TOK_SEMICOLON, ///< ;
-    TOK_OP,        ///< General operator (e.g. +, *, /).
-    TOK_AT,        ///< @
-    TOK_DOTDOT,    ///< ..
-    TOK_DOTDOT_EQ, ///< ..= (inclusive range).
-    TOK_DOTDOT_LT, ///< ..< (exclusive range, explicit).
-    TOK_ARROW,     ///< -> or =>
-    TOK_PIPE,      ///< |> (pipe operator).
-    TOK_TEST,      ///< 'test' keyword.
-    TOK_ASSERT,    ///< 'assert' keyword.
-    TOK_SIZEOF,    ///< 'sizeof' keyword.
-    TOK_DEF,       ///< 'def' keyword.
-    TOK_DEFER,     ///< 'defer' keyword.
-    TOK_AUTOFREE,  ///< 'autofree' keyword.
-    TOK_QUESTION,  ///< ?
-    TOK_USE,       ///< 'use' keyword.
-    TOK_QQ,        ///< ?? (null coalescing).
-    TOK_QQ_EQ,     ///< ??=
-    TOK_Q_DOT,     ///< ?. (optional chaining).
-    TOK_DCOLON,    ///< ::
-    TOK_TRAIT,     ///< 'trait' keyword.
-    TOK_IMPL,      ///< 'impl' keyword.
-    TOK_AND,       ///< 'and' keyword.
-    TOK_OR,        ///< 'or' keyword.
-    TOK_FOR,       ///< 'for' keyword.
-    TOK_COMPTIME,  ///< 'comptime' keyword.
-    TOK_ELLIPSIS,  ///< ...
-    TOK_UNION,     ///< 'union' keyword.
-    TOK_ASM,       ///< 'asm' keyword.
-    TOK_VOLATILE,  ///< 'volatile' keyword.
-    TOK_ASYNC,     ///< 'async' keyword.
-    TOK_AWAIT,     ///< 'await' keyword.
-    TOK_PREPROC,   ///< Preprocessor directive (#...).
-    TOK_ALIAS,     ///< 'alias' keyword.
-    TOK_COMMENT,   ///< Comment (usually skipped).
-    TOK_OPAQUE,    ///< 'opaque' keyword.
-    TOK_UNKNOWN    ///< Unknown token.
+    TOK_EOF = 0,    ///< End of File.
+    TOK_IDENT,      ///< Identifier (variable, function name).
+    TOK_INT,        ///< Integer literal.
+    TOK_FLOAT,      ///< Float literal.
+    TOK_STRING,     ///< String literal.
+    TOK_FSTRING,    ///< Formatted string literal (f"val is {x}").
+    TOK_RAW_STRING, ///< Raw string literal (r"..." - no interpolation).
+    TOK_CHAR,       ///< Character literal.
+    TOK_LPAREN,     ///< (
+    TOK_RPAREN,     ///< )
+    TOK_LBRACE,     ///< {
+    TOK_RBRACE,     ///< }
+    TOK_LBRACKET,   ///< [
+    TOK_RBRACKET,   ///< ]
+    TOK_LANGLE,     ///< <
+    TOK_RANGLE,     ///< >
+    TOK_COMMA,      ///< ,
+    TOK_COLON,      ///< :
+    TOK_SEMICOLON,  ///< ;
+    TOK_OP,         ///< General operator (e.g. +, *, /).
+    TOK_AT,         ///< @
+    TOK_DOTDOT,     ///< ..
+    TOK_DOTDOT_EQ,  ///< ..= (inclusive range).
+    TOK_DOTDOT_LT,  ///< ..< (exclusive range, explicit).
+    TOK_ARROW,      ///< -> or =>
+    TOK_PIPE,       ///< |> (pipe operator).
+    TOK_TEST,       ///< 'test' keyword.
+    TOK_ASSERT,     ///< 'assert' keyword.
+    TOK_SIZEOF,     ///< 'sizeof' keyword.
+    TOK_DEF,        ///< 'def' keyword.
+    TOK_DEFER,      ///< 'defer' keyword.
+    TOK_AUTOFREE,   ///< 'autofree' keyword.
+    TOK_QUESTION,   ///< ?
+    TOK_USE,        ///< 'use' keyword.
+    TOK_QQ,         ///< ?? (null coalescing).
+    TOK_QQ_EQ,      ///< ??=
+    TOK_Q_DOT,      ///< ?. (optional chaining).
+    TOK_DCOLON,     ///< ::
+    TOK_TRAIT,      ///< 'trait' keyword.
+    TOK_IMPL,       ///< 'impl' keyword.
+    TOK_AND,        ///< 'and' keyword.
+    TOK_OR,         ///< 'or' keyword.
+    TOK_FOR,        ///< 'for' keyword.
+    TOK_COMPTIME,   ///< 'comptime' keyword.
+    TOK_ELLIPSIS,   ///< ...
+    TOK_UNION,      ///< 'union' keyword.
+    TOK_ASM,        ///< 'asm' keyword.
+    TOK_VOLATILE,   ///< 'volatile' keyword.
+    TOK_ASYNC,      ///< 'async' keyword.
+    TOK_AWAIT,      ///< 'await' keyword.
+    TOK_PREPROC,    ///< Preprocessor directive (#...).
+    TOK_ALIAS,      ///< 'alias' keyword.
+    TOK_COMMENT,    ///< Comment (usually skipped).
+    TOK_OPAQUE,     ///< 'opaque' keyword.
+    TOK_UNKNOWN     ///< Unknown token.
 } TokenType;
 
 /**
@@ -129,10 +124,11 @@ typedef struct
  */
 typedef struct
 {
-    const char *src; ///< Source code buffer.
-    int pos;         ///< Current position index.
-    int line;        ///< Current line number.
-    int col;         ///< Current column number.
+    const char *src;   ///< Source code buffer.
+    int pos;           ///< Current position index.
+    int line;          ///< Current line number.
+    int col;           ///< Current column number.
+    int emit_comments; ///< 1 if comments should be emitted as tokens.
 } Lexer;
 
 /**
@@ -186,16 +182,6 @@ void *xcalloc(size_t n, size_t size);
 char *xstrdup(const char *s);
 
 /**
- * @brief Error reporting.
- */
-void zpanic(const char *fmt, ...);
-
-/**
- * @brief Error reporting with token location.
- */
-void zpanic_at(Token t, const char *fmt, ...);
-
-/**
  * @brief Load a file.
  */
 char *load_file(const char *filename);
@@ -222,122 +208,8 @@ void scan_build_directives(struct ParserContext *ctx, const char *src);
  */
 int levenshtein(const char *s1, const char *s2);
 
-/**
- * @brief Error reporting with suggestion.
- */
-void zpanic_with_suggestion(Token t, const char *msg, const char *suggestion);
-
-// Specific error types.
-
-/**
- * @brief Error reporting for undefined function.
- */
-void error_undefined_function(Token t, const char *func_name, const char *suggestion);
-
-/**
- * @brief Error reporting for wrong argument count.
- */
-void error_wrong_arg_count(Token t, const char *func_name, int expected, int got);
-
-/**
- * @brief Error reporting for undefined field.
- */
-void error_undefined_field(Token t, const char *struct_name, const char *field_name,
-                           const char *suggestion);
-
-/**
- * @brief Error reporting for type expected.
- */
-void error_type_expected(Token t, const char *expected, const char *got);
-
-/**
- * @brief Error reporting for cannot index.
- */
-void error_cannot_index(Token t, const char *type_name);
-
-// Warning system.
-
-/**
- * @brief Warning reporting.
- */
-void zwarn(const char *fmt, ...);
-
-/**
- * @brief Warning reporting with token location.
- */
-void zwarn_at(Token t, const char *fmt, ...);
-
-// Specific warnings.
-
-/**
- * @brief Warning reporting for unused variable.
- */
-void warn_unused_variable(Token t, const char *var_name);
-
-/**
- * @brief Warning reporting for unused parameter.
- */
-void warn_unused_parameter(Token t, const char *param_name, const char *func_name);
-
-/**
- * @brief Warning reporting for shadowing.
- */
-void warn_shadowing(Token t, const char *var_name);
-
-/**
- * @brief Warning reporting for unreachable code.
- */
-void warn_unreachable_code(Token t);
-
-/**
- * @brief Warning reporting for implicit conversion.
- */
-void warn_implicit_conversion(Token t, const char *from_type, const char *to_type);
-
-/**
- * @brief Warning reporting for narrowing conversion.
- */
-void warn_narrowing_conversion(Token t, const char *from_type, const char *to_type);
-
-/**
- * @brief Warning reporting for missing return.
- */
-void warn_missing_return(Token t, const char *func_name);
-
-/**
- * @brief Warning reporting for comparison always true.
- */
-void warn_comparison_always_true(Token t, const char *reason);
-
-/**
- * @brief Warning reporting for comparison always false.
- */
-void warn_comparison_always_false(Token t, const char *reason);
-
-/**
- * @brief Warning reporting for division by zero.
- */
-void warn_division_by_zero(Token t);
-
-/**
- * @brief Warning reporting for integer overflow.
- */
-void warn_integer_overflow(Token t, const char *type_name, long long value);
-
-/**
- * @brief Warning reporting for array bounds.
- */
-void warn_array_bounds(Token t, int index, int size);
-
-/**
- * @brief Warning reporting for format string.
- */
-void warn_format_string(Token t, int arg_num, const char *expected, const char *got);
-
-/**
- * @brief Warning reporting for null pointer.
- */
-void warn_null_pointer(Token t, const char *expr);
+// Diagnostics (errors and warnings) are in diagnostics/diagnostics.h
+#include "diagnostics/diagnostics.h"
 
 /**
  * @brief Compiler configuration and flags.
@@ -360,6 +232,11 @@ typedef struct
     int use_cpp;         ///< 1 if --cpp (emit C++ compatible code).
     int use_cuda;        ///< 1 if --cuda (emit CUDA-compatible code).
     int use_objc;        ///< 1 if --objc (emit Objective-C compatible code).
+    int mode_lsp;        ///< 1 if 'lsp' command (Language Server Protocol).
+    int json_output;     ///< 1 if --json (emit structured JSON diagnostics).
+    int no_typecheck;    ///< 1 if --no-typecheck (disable semantic analysis).
+
+    int keep_comments; ///< 1 if --keep-comments (preserve comments in output).
 
     // GCC Flags accumulator.
     char gcc_flags[4096]; ///< Flags passed to the backend compiler.
@@ -378,5 +255,39 @@ struct ParserContext;
  * @brief Scan build directives.
  */
 void scan_build_directives(struct ParserContext *ctx, const char *src);
+
+/**
+ * @brief Get monotonic time in seconds (high precision).
+ */
+double z_get_monotonic_time(void);
+
+/**
+ * @brief Get wall clock time in seconds.
+ */
+double z_get_time(void);
+
+/**
+ * @brief Setup terminal (enable ANSI colors on Windows).
+ */
+void z_setup_terminal(void);
+
+/**
+ * @brief Get temporary directory path.
+ * Windows: %TEMP% or C:\Windows\Temp
+ * POSIX: /tmp
+ * @return Path string (do not free).
+ */
+const char *z_get_temp_dir(void);
+
+/**
+ * @brief Get current process ID.
+ * @return PID.
+ */
+int z_get_pid(void);
+
+/**
+ * @brief Check if file descriptor refers to a terminal.
+ */
+int z_isatty(int fd);
 
 #endif

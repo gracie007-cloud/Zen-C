@@ -483,9 +483,22 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
                     }
                 }
 
-                if (!strchr(type, '*') && target->type == NODE_EXPR_CALL)
+                if (!strchr(type, '*') &&
+                    (target->type == NODE_EXPR_CALL || target->type == NODE_EXPR_LITERAL ||
+                     target->type == NODE_EXPR_BINARY || target->type == NODE_EXPR_UNARY ||
+                     target->type == NODE_EXPR_CAST))
                 {
-                    char *type_mangled = type;
+                    char *type_mangled = (char *)normalize_type_name(type);
+                    if (type_mangled != type)
+                    {                             // if changed
+                        mangled_base = "int32_t"; // Hack for now, assuming int -> int32_t
+                        // ideally mangled_base should be derived from type_mangled
+                        if (strcmp(type_mangled, "int32_t") == 0)
+                        {
+                            mangled_base = "int32_t";
+                        }
+                    }
+
                     char type_buf[256];
                     char *t_lt = strchr(type, '<');
                     if (t_lt)
@@ -518,7 +531,7 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
                     char *call_base = mangled_base;
 
                     int need_cast = 0;
-                    char mixin_func_name[128];
+                    char mixin_func_name[512];
                     snprintf(mixin_func_name, sizeof(mixin_func_name), "%s__%s", call_base, method);
 
                     char *resolved_method_suffix = NULL;
@@ -706,6 +719,47 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
             if (node->call.callee->type == NODE_EXPR_VAR)
             {
                 sig = find_func(ctx, node->call.callee->var_ref.name);
+                // Warn about undefined functions (only if no C header imports)
+                if (!sig && !find_struct_def(ctx, node->call.callee->var_ref.name))
+                {
+                    const char *name = node->call.callee->var_ref.name;
+
+                    // Check if project uses C interop (has C imports or stdlib imports)
+                    int has_c_interop = 0;
+
+                    // Check modules for C header imports
+                    Module *mod = ctx->modules;
+                    while (mod && !has_c_interop)
+                    {
+                        if (mod->is_c_header)
+                        {
+                            has_c_interop = 1;
+                        }
+                        mod = mod->next;
+                    }
+
+                    // Check imported_files for stdlib imports (absolute paths)
+                    ImportedFile *file = ctx->imported_files;
+                    while (file && !has_c_interop)
+                    {
+                        if (file->path && strstr(file->path, "/std/"))
+                        {
+                            has_c_interop = 1;
+                        }
+                        file = file->next;
+                    }
+
+                    // Skip internal runtime functions
+                    int is_internal = strncmp(name, "_z_", 3) == 0 || strncmp(name, "_Z", 2) == 0;
+
+                    // Only warn if no C interop and not an internal function
+                    if (!has_c_interop && !is_internal)
+                    {
+                        Token t = node->call.callee->token;
+                        fprintf(stderr, "Warning at %s:%d:%d: Undefined function '%s'\n",
+                                g_current_filename, t.line, t.col, name);
+                    }
+                }
             }
 
             ASTNode *arg = node->call.args;
@@ -995,6 +1049,89 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
         fprintf(out, " })");
         break;
     }
+    case NODE_IF:
+    {
+        // If-expression: emit as GCC statement expression
+        // Use typeof on first branch's last expression to declare result type
+        fprintf(out, "({ ");
+
+        // Find the result expression from then_body for typeof
+        ASTNode *then_result = NULL;
+        if (node->if_stmt.then_body && node->if_stmt.then_body->type == NODE_BLOCK)
+        {
+            ASTNode *stmt = node->if_stmt.then_body->block.statements;
+            while (stmt && stmt->next)
+            {
+                stmt = stmt->next;
+            }
+            then_result = stmt;
+        }
+        else
+        {
+            then_result = node->if_stmt.then_body;
+        }
+
+        // Declare result variable using typeof
+        if (then_result)
+        {
+            fprintf(out, "__typeof__(");
+            codegen_expression(ctx, then_result, out);
+            fprintf(out, ") _ifval; ");
+        }
+        else
+        {
+            fprintf(out, "int _ifval; "); // fallback
+        }
+
+        fprintf(out, "if (");
+        codegen_expression(ctx, node->if_stmt.condition, out);
+        fprintf(out, ") { ");
+        if (node->if_stmt.then_body && node->if_stmt.then_body->type == NODE_BLOCK)
+        {
+            ASTNode *stmt = node->if_stmt.then_body->block.statements;
+            while (stmt && stmt->next)
+            {
+                codegen_node_single(ctx, stmt, out);
+                stmt = stmt->next;
+            }
+            if (stmt)
+            {
+                fprintf(out, "_ifval = ");
+                codegen_expression(ctx, stmt, out);
+                fprintf(out, "; ");
+            }
+        }
+        else if (node->if_stmt.then_body)
+        {
+            fprintf(out, "_ifval = ");
+            codegen_expression(ctx, node->if_stmt.then_body, out);
+            fprintf(out, "; ");
+        }
+        fprintf(out, "} else { ");
+        if (node->if_stmt.else_body && node->if_stmt.else_body->type == NODE_BLOCK)
+        {
+            ASTNode *stmt = node->if_stmt.else_body->block.statements;
+            while (stmt && stmt->next)
+            {
+                codegen_node_single(ctx, stmt, out);
+                stmt = stmt->next;
+            }
+            if (stmt)
+            {
+                fprintf(out, "_ifval = ");
+                codegen_expression(ctx, stmt, out);
+                fprintf(out, "; ");
+            }
+        }
+        else if (node->if_stmt.else_body)
+        {
+            fprintf(out, "_ifval = ");
+            codegen_expression(ctx, node->if_stmt.else_body, out);
+            fprintf(out, "; ");
+        }
+        fprintf(out, "} _ifval; })");
+        break;
+    }
     case NODE_TRY:
     {
         char *type_name = "Result";
@@ -1140,6 +1277,9 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
         codegen_expression(ctx, node->va_copy.src, out);
         fprintf(out, ")");
         break;
+    case NODE_COMMENT:
+        fprintf(out, "%s\n", node->comment.content);
+        break;
     case NODE_VA_ARG:
     {
         char *type_str = codegen_type_to_string(node->va_arg.type_info);
@@ -1169,6 +1309,14 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
         {
             mapped = "unsigned long";
         }
+        else if (strcmp(t, "c_long_long") == 0)
+        {
+            mapped = "long long";
+        }
+        else if (strcmp(t, "c_ulong_long") == 0)
+        {
+            mapped = "unsigned long long";
+        }
         else if (strcmp(t, "c_short") == 0)
         {
             mapped = "short";
@@ -1185,9 +1333,10 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
         {
             mapped = "unsigned char";
         }
-        else if (strcmp(t, "int") == 0)
+        const char *norm = normalize_type_name(t);
+        if (norm != t)
         {
-            mapped = "int32_t";
+            mapped = norm;
         }
         else if (strcmp(t, "uint") == 0)
         {
@@ -1220,6 +1369,14 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
             {
                 mapped = "unsigned long";
             }
+            else if (strcmp(t, "c_long_long") == 0)
+            {
+                mapped = "long long";
+            }
+            else if (strcmp(t, "c_ulong_long") == 0)
+            {
+                mapped = "unsigned long long";
+            }
             else if (strcmp(t, "c_short") == 0)
             {
                 mapped = "short";
@@ -1236,13 +1393,17 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
             {
                 mapped = "unsigned char";
             }
-            else if (strcmp(t, "int") == 0)
+            else
             {
-                mapped = "int32_t"; // Strict mapping
-            }
-            else if (strcmp(t, "uint") == 0)
-            {
-                mapped = "unsigned int"; // uint alias
+                const char *norm = normalize_type_name(t);
+                if (norm != t)
+                {
+                    mapped = norm;
+                }
+                else if (strcmp(t, "uint") == 0)
+                {
+                    mapped = "unsigned int";
+                }
             }
 
             fprintf(out, "sizeof(%s)", mapped);

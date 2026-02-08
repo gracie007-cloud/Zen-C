@@ -21,7 +21,7 @@ endif
 # To build with zig:   make CC="zig cc"
 # Version synchronization
 GIT_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.1.0")
-CFLAGS = -Wall -Wextra -g -I./src -I./src/ast -I./src/parser -I./src/codegen -I./plugins -I./src/zen -I./src/utils -I./src/lexer -I./src/analysis -I./src/lsp -DZEN_VERSION=\"$(GIT_VERSION)\"
+CFLAGS = -Wall -Wextra -g -I./src -I./src/ast -I./src/parser -I./src/codegen -I./plugins -I./src/zen -I./src/utils -I./src/lexer -I./src/analysis -I./src/lsp -I./src/diagnostics -DZEN_VERSION=\"$(GIT_VERSION)\" -DZEN_SHARE_DIR=\"$(SHAREDIR)\"
 TARGET = zc$(EXE)
 LIBS = -lm -lpthread -ldl
 
@@ -40,16 +40,19 @@ SRCS = src/main.c \
        src/codegen/codegen_main.c \
        src/codegen/codegen_utils.c \
        src/utils/utils.c \
+       src/diagnostics/diagnostics.c \
        src/lexer/token.c \
        src/analysis/typecheck.c \
        src/lsp/json_rpc.c \
        src/lsp/lsp_main.c \
        src/lsp/lsp_analysis.c \
+       src/lsp/lsp_semantic.c \
        src/lsp/lsp_index.c \
        src/lsp/lsp_project.c \
        src/lsp/cJSON.c \
        src/zen/zen_facts.c \
        src/repl/repl.c \
+       src/repl/repl_os.c \
        src/plugins/plugin_manager.c
 
 OBJ_DIR = obj
@@ -136,10 +139,15 @@ install: $(TARGET)
 	test -f man/zc.1 && $(INSTALL) -m 644 man/zc.1 $(MANDIR)/man1/zc.1 || true
 	test -f man/zc.5 && $(INSTALL) -m 644 man/zc.5 $(MANDIR)/man5/zc.5 || true
 	test -f man/zc.7 && $(INSTALL) -m 644 man/zc.7 $(MANDIR)/man7/zc.7 || true
+	test -f man/zc-stdlib.7 && $(INSTALL) -m 644 man/zc-stdlib.7 $(MANDIR)/man7/zc-stdlib.7 || true
 	
 	# Install standard library
 	$(INSTALL) -d $(SHAREDIR)
 	$(CP) std $(SHAREDIR)/
+	
+	# Install facts
+	$(INSTALL) -m 644 src/zen/facts.json $(SHAREDIR)/facts.json
+	$(INSTALL) -m 644 src/repl/docs.json $(SHAREDIR)/docs.json
 	
 	# Install plugin headers
 	$(INSTALL) -d $(INCLUDEDIR)
@@ -154,6 +162,7 @@ uninstall:
 	$(RM) $(MANDIR)/man1/zc.1
 	$(RM) $(MANDIR)/man5/zc.5
 	$(RM) $(MANDIR)/man7/zc.7
+	$(RM) $(MANDIR)/man7/zc-stdlib.7
 	$(RM) $(SHAREDIR)
 	@echo "=> Uninstalled from $(BINDIR)/$(TARGET)"
 	@echo "=> Removed man pages from $(MANDIR)"
@@ -189,9 +198,15 @@ clean:
 
 # Test
 test: $(TARGET) $(PLUGINS)
-	./tests/run_tests.sh
-	./tests/run_codegen_tests.sh
-	./tests/run_example_transpile.sh
+	./tests/scripts/run_tests.sh
+	./tests/scripts/run_codegen_tests.sh
+	./tests/scripts/run_example_transpile.sh
+
+test-lsp: $(TARGET)
+	@echo "=> Building LSP Test Runner"
+	$(CC) $(CFLAGS) tests/compiler/lsp/lsp_test_runner.c src/lsp/cJSON.c -o tests/compiler/lsp/test_runner
+	@echo "=> Running LSP Tests"
+	./tests/compiler/lsp/test_runner
 
 # Build with alternative compilers
 zig:
