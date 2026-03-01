@@ -514,6 +514,11 @@ int is_known_generic(ParserContext *ctx, char *name);
 int is_primitive_type_name(const char *name);
 
 /**
+ * @brief Maps a primitive type name string to its `TypeKind` enum.
+ */
+TypeKind get_primitive_type_kind(const char *name);
+
+/**
  * @brief Registers an implementation template.
  */
 void register_impl_template(ParserContext *ctx, const char *sname, const char *param,

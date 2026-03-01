@@ -2527,6 +2527,13 @@ ASTNode *parse_primary(ParserContext *ctx, Lexer *l)
                     is_struct_init = 1;
                 }
             }
+            
+            // Allow primitive types to be initialized with positional values e.g., int{5}
+            if (!is_struct_init && is_primitive_type_name(acc))
+            {
+                is_struct_init = 1;
+            }
+            
             if (is_struct_init)
             {
                 // Special case for primitive types (e.g. i32{})
@@ -2541,48 +2548,11 @@ ASTNode *parse_primary(ParserContext *ctx, Lexer *l)
                         node->literal.type_kind = LITERAL_INT;
                         node->literal.int_val = 0;
                         // Determine type kind from name
-                        TypeKind tk = TYPE_INT;
-                        if (strcmp(acc, "i8") == 0)
+                        TypeKind tk = get_primitive_type_kind(acc);
+                        if (tk == TYPE_UNKNOWN) tk = TYPE_INT; // fallback
+
+                        if (tk == TYPE_F32 || tk == TYPE_F64 || tk == TYPE_FLOAT)
                         {
-                            tk = TYPE_I8;
-                        }
-                        else if (strcmp(acc, "u8") == 0)
-                        {
-                            tk = TYPE_U8;
-                        }
-                        else if (strcmp(acc, "i16") == 0)
-                        {
-                            tk = TYPE_I16;
-                        }
-                        else if (strcmp(acc, "u16") == 0)
-                        {
-                            tk = TYPE_U16;
-                        }
-                        else if (strcmp(acc, "i32") == 0)
-                        {
-                            tk = TYPE_I32;
-                        }
-                        else if (strcmp(acc, "u32") == 0)
-                        {
-                            tk = TYPE_U32;
-                        }
-                        else if (strcmp(acc, "i64") == 0)
-                        {
-                            tk = TYPE_I64;
-                        }
-                        else if (strcmp(acc, "u64") == 0)
-                        {
-                            tk = TYPE_U64;
-                        }
-                        else if (strcmp(acc, "f32") == 0)
-                        {
-                            tk = TYPE_F32;
-                            node->literal.type_kind = LITERAL_FLOAT;
-                            node->literal.float_val = 0.0;
-                        }
-                        else if (strcmp(acc, "f64") == 0)
-                        {
-                            tk = TYPE_F64;
                             node->literal.type_kind = LITERAL_FLOAT;
                             node->literal.float_val = 0.0;
                         }
@@ -2590,10 +2560,25 @@ ASTNode *parse_primary(ParserContext *ctx, Lexer *l)
                         node->type_info = type_new(tk);
                         return node;
                     }
-                    // TODO: Handle non-empty primitive init { val } code if needed
-                    // For now, fall through (which will likely error as struct init) or we can
-                    // implement it. Given the immediate failure is generic defaults new<T>(), empty
-                    // is priority.
+                    else
+                    {
+                        node = parse_expression(ctx, l);
+                        if (lexer_peek(l).type != TOK_RBRACE)
+                        {
+                            zpanic_at(lexer_peek(l), "Expected '}' after primitive initialization");
+                        }
+                        lexer_next(l); // Eat }
+                        
+                        ASTNode *cast = ast_create(NODE_EXPR_CAST);
+                        cast->cast.target_type = xstrdup(acc);
+                        cast->cast.expr = node;
+                        
+                        TypeKind tk = get_primitive_type_kind(acc);
+                        if (tk == TYPE_UNKNOWN) tk = TYPE_INT;
+                        
+                        cast->type_info = type_new(tk);
+                        return cast;
+                    }
                 }
 
                 char *struct_name = acc;
@@ -3784,53 +3769,28 @@ ASTNode *parse_primary(ParserContext *ctx, Lexer *l)
             char tuple_name[1024];
             sprintf(tuple_name, "Tuple_%s", sig);
 
-            char *code = xmalloc(4096);
-            snprintf(code, 4096, "(%s){", tuple_name);
+            node = ast_create(NODE_EXPR_STRUCT_INIT);
+            node->struct_init.struct_name = xstrdup(tuple_name);
 
+            ASTNode *head = NULL, *tail = NULL;
             for (int i = 0; i < count; i++)
             {
-                if (i > 0)
+                ASTNode *assign = ast_create(NODE_VAR_DECL);
+                char name[32];
+                snprintf(name, sizeof(name), "v%d", i);
+                assign->var_decl.name = xstrdup(name);
+                assign->var_decl.init_expr = elements[i];
+                if (!head)
                 {
-                    strcat(code, ", ");
-                }
-
-                if (elements[i]->type == NODE_EXPR_LITERAL)
-                {
-                    char buf[256];
-                    if (elements[i]->literal.type_kind == LITERAL_INT) // int
-                    {
-                        sprintf(buf, "%lld", elements[i]->literal.int_val);
-                    }
-                    else if (elements[i]->literal.type_kind == LITERAL_FLOAT) // float
-                    {
-                        sprintf(buf, "%f", elements[i]->literal.float_val);
-                    }
-                    else if (elements[i]->literal.type_kind == LITERAL_STRING) // string
-                    {
-                        sprintf(buf, "\"%s\"", elements[i]->literal.string_val);
-                    }
-                    else
-                    {
-                        sprintf(buf, "0");
-                    }
-                    strcat(code, buf);
-                }
-                else if (elements[i]->type == NODE_EXPR_VAR)
-                {
-                    strcat(code, elements[i]->var_ref.name);
+                    head = assign;
                 }
                 else
                 {
-                    // For complex expressions, we need a different approach
-                    // For now, just put a placeholder - this won't work for all cases
-                    // So it's a TODO...
-                    strcat(code, "/* complex expr */0");
+                    tail->next = assign;
                 }
+                tail = assign;
             }
-            strcat(code, "}");
-
-            node = ast_create(NODE_RAW_STMT);
-            node->raw_stmt.content = code;
+            node->struct_init.fields = head;
 
             // Set type info
             Type *tuple_type = type_new(TYPE_STRUCT);

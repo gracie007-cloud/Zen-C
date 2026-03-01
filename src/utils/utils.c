@@ -141,8 +141,7 @@ CompilerConfig g_config = {0};
 static void append_flag(char *dest, size_t max_size, const char *flag)
 {
     size_t current_len = strlen(dest);
-    int has_space = strchr(flag, ' ') != NULL;
-    size_t required = strlen(flag) + (has_space ? 2 : 0) + (current_len > 0 ? 1 : 0);
+    size_t required = strlen(flag) + (current_len > 0 ? 1 : 0);
 
     if (current_len + required + 1 > max_size)
     {
@@ -152,25 +151,11 @@ static void append_flag(char *dest, size_t max_size, const char *flag)
 
     if (current_len > 0)
     {
-        if (has_space)
-        {
-            snprintf(dest + current_len, max_size - current_len, " \"%s\"", flag);
-        }
-        else
-        {
-            snprintf(dest + current_len, max_size - current_len, " %s", flag);
-        }
+        snprintf(dest + current_len, max_size - current_len, " %s", flag);
     }
     else
     {
-        if (has_space)
-        {
-            snprintf(dest, max_size, "\"%s\"", flag);
-        }
-        else
-        {
-            snprintf(dest, max_size, "%s", flag);
-        }
+        snprintf(dest, max_size, "%s", flag);
     }
 }
 

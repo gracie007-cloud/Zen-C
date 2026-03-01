@@ -343,7 +343,15 @@ void arg_list_add_from_string(ArgList *list, const char *str)
 
         while (*p && (in_quote || !isspace(*p)))
         {
-            if (*p == '\"')
+            if (*p == '\\' && *(p + 1) == '\"')
+            {
+                if (d - arg < 4095)
+                {
+                    *d++ = '\"';
+                }
+                p += 2;
+            }
+            else if (*p == '\"')
             {
                 in_quote = !in_quote;
                 p++;

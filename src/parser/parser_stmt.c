@@ -2950,7 +2950,7 @@ ASTNode *parse_statement(ParserContext *ctx, Lexer *l)
 
 ASTNode *parse_block(ParserContext *ctx, Lexer *l)
 {
-    lexer_next(l); // eat '{'
+    expect(l, TOK_LBRACE, "Expected '{' to start a block");
     enter_scope(ctx);
     ASTNode *head = 0, *tail = 0;
 

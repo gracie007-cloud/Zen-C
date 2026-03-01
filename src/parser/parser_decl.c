@@ -123,6 +123,10 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
         ret_type_obj = parse_type_formal(ctx, l);
         ret = type_to_string(ret_type_obj);
     }
+    else if (lexer_peek(l).type == TOK_COLON)
+    {
+        zpanic_at(lexer_peek(l), "Functions use '->' for the return type, not ':'");
+    }
 
     extern char *curr_func_ret;
     curr_func_ret = ret;
@@ -147,11 +151,12 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
     }
 
     ASTNode *body = NULL;
-    if (lexer_peek(l).type == TOK_SEMICOLON)
+    Token next_tok = lexer_peek(l);
+    if (next_tok.type == TOK_SEMICOLON)
     {
         lexer_next(l); // consume ;
     }
-    else
+    else if (next_tok.type == TOK_LBRACE)
     {
         // Set self context flags for .member shorthand in methods with self
         int prev_in_method = ctx->in_method_with_self;
@@ -167,6 +172,10 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
         // Restore previous state
         ctx->in_method_with_self = prev_in_method;
         ctx->self_is_pointer = prev_self_ptr;
+    }
+    else
+    {
+        zpanic_at(next_tok, "Expected '{' or ';' after function signature");
     }
 
     // Check for unused parameters

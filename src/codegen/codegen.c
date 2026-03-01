@@ -602,13 +602,8 @@ void codegen_expression(ParserContext *ctx, ASTNode *node, FILE *out)
                 {
                     char *type_mangled = (char *)normalize_type_name(type);
                     if (type_mangled != type)
-                    {                             // if changed
-                        mangled_base = "int32_t"; // Hack for now, assuming int -> int32_t
-                        // ideally mangled_base should be derived from type_mangled
-                        if (strcmp(type_mangled, "int32_t") == 0)
-                        {
-                            mangled_base = "int32_t";
-                        }
+                    {
+                        mangled_base = type_mangled;
                     }
 
                     char type_buf[256];

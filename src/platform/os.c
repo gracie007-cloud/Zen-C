@@ -246,30 +246,42 @@ static char *quote_arg(const char *arg)
 {
     if (!strpbrk(arg, " \t\n\v\""))
     {
-        return strdup(arg);
+        return strdup(arg); // use strdup since we free it later directly, or xstrdup
     }
 
     size_t len = strlen(arg);
-    size_t new_len = len + 3;
-    for (size_t i = 0; i < len; i++)
+    char *result = malloc(len * 2 + 3);
+    char *p = result;
+    *p++ = '\"';
+
+    for (size_t i = 0; i < len; )
     {
-        if (arg[i] == '\"')
+        int num_backslashes = 0;
+        while (i < len && arg[i] == '\\')
         {
-            new_len++;
+            num_backslashes++;
+            i++;
+        }
+
+        if (i == len)
+        {
+            for (int k = 0; k < num_backslashes * 2; k++) *p++ = '\\';
+            break;
+        }
+        else if (arg[i] == '\"')
+        {
+            for (int k = 0; k < num_backslashes * 2 + 1; k++) *p++ = '\\';
+            *p++ = '\"';
+            i++;
+        }
+        else
+        {
+            for (int k = 0; k < num_backslashes; k++) *p++ = '\\';
+            *p++ = arg[i];
+            i++;
         }
     }
 
-    char *result = malloc(new_len);
-    char *p = result;
-    *p++ = '\"';
-    for (size_t i = 0; i < len; i++)
-    {
-        if (arg[i] == '\"')
-        {
-            *p++ = '\\';
-        }
-        *p++ = arg[i];
-    }
     *p++ = '\"';
     *p = '\0';
     return result;
