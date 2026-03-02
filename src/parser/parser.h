@@ -896,6 +896,11 @@ ASTNode *parse_macro_call(ParserContext *ctx, Lexer *l, char *name);
 ASTNode *parse_statement(ParserContext *ctx, Lexer *l);
 
 /**
+ * @brief Normalizes raw block content (strips \r from CRLF sequences).
+ */
+char *normalize_raw_content(const char *content);
+
+/**
  * @brief Parses a block of statements { ... }.
  */
 ASTNode *parse_block(ParserContext *ctx, Lexer *l);

@@ -144,7 +144,7 @@ static void check_assignment_condition(ASTNode *cond)
     }
 }
 
-static char *normalize_raw_content(const char *content)
+char *normalize_raw_content(const char *content)
 {
     if (!content)
     {
@@ -162,7 +162,6 @@ static char *normalize_raw_content(const char *content)
         {
             if (*(s + 1) == '\n')
             {
-                // \r\n -> \n: skip \r, write \n, advance past both
                 *d++ = '\n';
                 s += 2;
                 continue;
