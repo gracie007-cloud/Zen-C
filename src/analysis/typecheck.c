@@ -145,7 +145,7 @@ static void check_move_for_rvalue(TypeChecker *tc, ASTNode *rvalue)
     {
         return;
     }
-
+    
     if (is_type_copy(tc->pctx, rvalue->type_info))
     {
         return;
@@ -1451,6 +1451,20 @@ static void check_node(TypeChecker *tc, ASTNode *node)
         tc->pctx->move_state = prev_move_state;
         break;
     }
+    case NODE_RAW_STMT:
+        if (node->raw_stmt.used_symbols && node->raw_stmt.used_symbol_count > 0)
+        {
+            for (int i = 0; i < node->raw_stmt.used_symbol_count; i++)
+            {
+                ZenSymbol *sym = tc_lookup(tc, node->raw_stmt.used_symbols[i]);
+                if (sym)
+                {
+                    check_use_validity(tc, node, sym);
+                }
+            }
+        }
+        break;
+
     case NODE_EXPR_CAST:
         // Check the expression being cast
         check_node(tc, node->cast.expr);

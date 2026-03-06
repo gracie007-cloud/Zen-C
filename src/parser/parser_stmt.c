@@ -2306,6 +2306,7 @@ ASTNode *parse_statement(ParserContext *ctx, Lexer *l)
             // If TOK_RBRACE, do not consume it, so parse_block can see it and terminate loop.
 
             ASTNode *n = ast_create(NODE_RAW_STMT);
+            n->token = tk;
             // Append semicolon to Statement Expression to make it a valid statement
             char *stmt_code = xmalloc(strlen(code) + 2);
             sprintf(stmt_code, "%s;", code);
