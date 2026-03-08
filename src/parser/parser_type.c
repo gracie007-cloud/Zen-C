@@ -1,10 +1,7 @@
 
 #include "../ast/ast.h"
+#include "analysis/const_fold.h"
 #include "parser.h"
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 Type *parse_type_base(ParserContext *ctx, Lexer *l)
 {
@@ -87,6 +84,8 @@ Type *parse_type_base(ParserContext *ctx, Lexer *l)
                     // To prevent name mangling, we might consider changing
                     // this to also use the prefix.
                     merged = xstrdup(resolved_suffix);
+
+                    register_extern_symbol(ctx, merged);
                 }
                 else
                 {
@@ -295,10 +294,10 @@ Type *parse_type_base(ParserContext *ctx, Lexer *l)
                         }
                     }
 
-                    Type *t = type_new(name[0] == 'u' ? TYPE_UBITINT : TYPE_BITINT);
-                    t->array_size = width;
+                    Type *inner_t = type_new(name[0] == 'u' ? TYPE_UBITINT : TYPE_BITINT);
+                    inner_t->array_size = width;
                     free(name);
-                    return t;
+                    return inner_t;
                 }
             }
         }
@@ -699,32 +698,17 @@ Type *parse_type_base(ParserContext *ctx, Lexer *l)
         if (lexer_peek(l).type == TOK_SEMICOLON)
         {
             lexer_next(l); // eat ;
-            Token size_tok = lexer_next(l);
+            ASTNode *size_expr = parse_expression(ctx, l);
+            long long compiled_size = 0;
             int size = 0;
-            if (size_tok.type == TOK_INT)
+            if (eval_const_int_expr(size_expr, ctx, &compiled_size))
             {
-                size = atoi(size_tok.start);
-            }
-            else if (size_tok.type == TOK_IDENT)
-            {
-                // Look up in symbol table for constant propagation
-                char *name = token_strdup(size_tok);
-                ZenSymbol *sym = find_symbol_entry(ctx, name);
-                if (sym && sym->is_const_value)
-                {
-                    size = sym->const_int_val;
-                    sym->is_used = 1; // MARK AS USED
-                }
-                else
-                {
-                    zpanic_at(size_tok,
-                              "Array size must be a compile-time constant or integer literal");
-                }
-                free(name);
+                size = (int)compiled_size;
             }
             else
             {
-                zpanic_at(size_tok, "Expected integer for array size");
+                zpanic_at(size_expr->token,
+                          "Array size must be a compile-time constant or integer literal");
             }
             if (lexer_next(l).type != TOK_RBRACKET)
             {
@@ -743,9 +727,11 @@ Type *parse_type_base(ParserContext *ctx, Lexer *l)
             zpanic_at(lexer_peek(l), "Expected ] in type");
         }
 
-        // Register Slice
         char *inner_str = type_to_string(inner);
-        register_slice(ctx, inner_str);
+        if (!is_known_generic(ctx, inner_str))
+        {
+            register_slice(ctx, inner_str);
+        }
 
         Type *arr = type_new(TYPE_ARRAY);
         arr->inner = inner;
@@ -835,10 +821,23 @@ Type *parse_type_formal(ParserContext *ctx, Lexer *l)
         lexer_next(l); // eat 'fn'
 
         int star_count = 0;
-        while (lexer_peek(l).type == TOK_OP && strncmp(lexer_peek(l).start, "*", 1) == 0)
+        while (lexer_peek(l).type == TOK_OP && lexer_peek(l).start[0] == '*')
         {
+            Token st = lexer_peek(l);
+            int valid = 1;
+            for (int i = 0; i < st.len; i++)
+            {
+                if (st.start[i] != '*')
+                {
+                    valid = 0;
+                }
+            }
+            if (!valid)
+            {
+                break;
+            }
             lexer_next(l);
-            star_count++;
+            star_count += st.len;
         }
 
         Type *fn_type = type_new(TYPE_FUNCTION);
@@ -895,59 +894,86 @@ Type *parse_type_formal(ParserContext *ctx, Lexer *l)
     }
 
     // Handles: T*, T**, etc.
-    while (lexer_peek(l).type == TOK_OP && *lexer_peek(l).start == '*')
+    while (lexer_peek(l).type == TOK_OP && lexer_peek(l).start[0] == '*')
     {
-        lexer_next(l); // consume '*'
-        t = type_new_ptr(t);
+        Token st = lexer_peek(l);
+        int valid = 1;
+        for (int i = 0; i < st.len; i++)
+        {
+            if (st.start[i] != '*')
+            {
+                valid = 0;
+            }
+        }
+        if (!valid)
+        {
+            break;
+        }
+
+        lexer_next(l); // consume '*' or '**'
+        for (int i = 0; i < st.len; i++)
+        {
+            t = type_new_ptr(t);
+        }
     }
 
-    // 4. Handle Array Suffixes (e.g. int[10])
+    int *dims = NULL;
+    int dims_cap = 0;
+    int dims_count = 0;
+
     while (lexer_peek(l).type == TOK_LBRACKET)
     {
-        lexer_next(l); // consume '['
+        lexer_next(l);
 
-        int size = 0;
-        if (lexer_peek(l).type == TOK_INT)
+        if (dims_count == dims_cap)
         {
-            Token t = lexer_peek(l);
-            char buffer[64];
-            int len = t.len < 63 ? t.len : 63;
-            strncpy(buffer, t.start, len);
-            buffer[len] = 0;
-            size = atoi(buffer);
-            lexer_next(l);
-        }
-        else if (lexer_peek(l).type == TOK_IDENT)
-        {
-            Token t = lexer_peek(l);
-            char *name = token_strdup(t);
-            ZenSymbol *sym = find_symbol_entry(ctx, name);
-            if (sym && sym->is_const_value)
-            {
-                size = sym->const_int_val;
-                sym->is_used = 1;
-            }
-            else
-            {
-                zpanic_at(t, "Array size must be a known compile-time constant integer");
-            }
-            free(name);
-            lexer_next(l);
+            dims_cap = dims_cap == 0 ? 4 : dims_cap * 2;
+            dims = xrealloc(dims, sizeof(int) * dims_cap);
         }
 
-        expect(l, TOK_RBRACKET, "Expected ']' in array type");
-
-        if (size == 0)
+        if (lexer_peek(l).type == TOK_RBRACKET)
         {
+            lexer_next(l);
+
             char *inner_str = type_to_string(t);
             register_slice(ctx, inner_str);
             free(inner_str);
+
+            dims[dims_count++] = 0;
+            continue;
         }
 
+        ASTNode *size_expr = parse_expression(ctx, l);
+        long long compiled_size = 0;
+        int size = 0;
+        if (eval_const_int_expr(size_expr, ctx, &compiled_size))
+        {
+            size = (int)compiled_size;
+        }
+        else
+        {
+            zpanic_at(size_expr->token, "Array size must be a known compile-time constant integer");
+        }
+
+        if (lexer_next(l).type != TOK_RBRACKET)
+        {
+            zpanic_at(lexer_peek(l), "Expected ']' in array type");
+        }
+
+        dims[dims_count++] = size;
+    }
+
+    for (int i = dims_count - 1; i >= 0; i--)
+    {
         Type *arr = type_new(TYPE_ARRAY);
         arr->inner = t;
-        arr->array_size = size;
+        arr->array_size = dims[i];
         t = arr;
+    }
+
+    if (dims)
+    {
+        free(dims);
     }
 
     if (is_restrict)
@@ -970,7 +996,7 @@ char *parse_type(ParserContext *ctx, Lexer *l)
 
 char *parse_array_literal(ParserContext *ctx, Lexer *l, const char *st)
 {
-    (void)ctx; // suppress unused parameter warning
+    (void)ctx;
     lexer_next(l);
     size_t cap = 128;
     char *c = xmalloc(cap);

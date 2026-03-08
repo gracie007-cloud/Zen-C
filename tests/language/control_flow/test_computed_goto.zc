@@ -1,5 +1,5 @@
 
-test "test_computed_goto" -> int {
+test "test_computed_goto" {
     let x = 0;
     
     // Get address of label using && unary operator

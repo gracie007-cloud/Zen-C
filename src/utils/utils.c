@@ -46,75 +46,8 @@ static void *arena_alloc_raw(size_t size)
 }
 
 #include <time.h>
-
-#ifdef _WIN32
-#include <windows.h>
-#include <io.h>
-#include <process.h>
-#endif
-
-double z_get_monotonic_time(void)
-{
-#ifdef _WIN32
-    static LARGE_INTEGER freq;
-    static int init = 0;
-    if (!init)
-    {
-        QueryPerformanceFrequency(&freq);
-        init = 1;
-    }
-    LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
-    return (double)now.QuadPart / (double)freq.QuadPart;
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec + ts.tv_nsec / 1e9;
-#endif
-}
-
-double z_get_time(void)
-{
-#ifdef _WIN32
-    struct timespec ts;
-    timespec_get(&ts, TIME_UTC);
-    return ts.tv_sec + ts.tv_nsec / 1e9;
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    return ts.tv_sec + ts.tv_nsec / 1e9;
-#endif
-}
-
-void z_setup_terminal(void)
-{
-#ifdef _WIN32
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut == INVALID_HANDLE_VALUE)
-    {
-        return;
-    }
-    DWORD dwMode = 0;
-    if (!GetConsoleMode(hOut, &dwMode))
-    {
-        return;
-    }
-    dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-    SetConsoleMode(hOut, dwMode);
-
-    HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
-    if (hErr == INVALID_HANDLE_VALUE)
-    {
-        return;
-    }
-    if (!GetConsoleMode(hErr, &dwMode))
-    {
-        return;
-    }
-    dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-    SetConsoleMode(hErr, dwMode);
-#endif
-}
+#include "platform/arch.h"
+#include "platform/os.h"
 
 void *xmalloc(size_t size)
 {
@@ -205,6 +138,27 @@ char g_cflags[MAX_FLAGS_SIZE] = "";
 int g_warning_count = 0;
 CompilerConfig g_config = {0};
 
+static void append_flag(char *dest, size_t max_size, const char *flag)
+{
+    size_t current_len = strlen(dest);
+    size_t required = strlen(flag) + (current_len > 0 ? 1 : 0);
+
+    if (current_len + required + 1 > max_size)
+    {
+        zwarn("Build flags buffer overflow prevented.");
+        return;
+    }
+
+    if (current_len > 0)
+    {
+        snprintf(dest + current_len, max_size - current_len, " %s", flag);
+    }
+    else
+    {
+        snprintf(dest, max_size, "%s", flag);
+    }
+}
+
 // Helper for environment expansion
 static void expand_env_vars(char *dest, size_t dest_size, const char *src)
 {
@@ -231,7 +185,7 @@ static void expand_env_vars(char *dest, size_t dest_size, const char *src)
                         size_t val_len = strlen(val);
                         if (val_len < remaining)
                         {
-                            strcpy(d, val);
+                            strncpy(d, val, remaining);
                             d += val_len;
                             remaining -= val_len;
                             s = end + 1;
@@ -252,7 +206,7 @@ static int is_os_active(const char *os_name)
 {
     if (0 == strcmp(os_name, "linux"))
     {
-#ifdef __linux__
+#if ZC_OS_LINUX
         return 1;
 #else
         return 0;
@@ -260,7 +214,7 @@ static int is_os_active(const char *os_name)
     }
     else if (0 == strcmp(os_name, "windows"))
     {
-#ifdef _WIN32
+#if ZC_OS_WINDOWS
         return 1;
 #else
         return 0;
@@ -268,7 +222,7 @@ static int is_os_active(const char *os_name)
     }
     else if (0 == strcmp(os_name, "macos") || 0 == strcmp(os_name, "darwin"))
     {
-#ifdef __APPLE__
+#if ZC_OS_MACOS
         return 1;
 #else
         return 0;
@@ -306,6 +260,13 @@ void scan_build_directives(ParserContext *ctx, const char *src)
             strncpy(raw_line, start, len);
             raw_line[len] = 0;
 
+            // Strip trailing \r (Windows CRLF)
+            int rlen = strlen(raw_line);
+            if (rlen > 0 && raw_line[rlen - 1] == '\r')
+            {
+                raw_line[rlen - 1] = 0;
+            }
+
             char line[2048];
             expand_env_vars(line, sizeof(line), raw_line);
 
@@ -313,90 +274,118 @@ void scan_build_directives(ParserContext *ctx, const char *src)
             char *colon = strchr(line, ':');
             if (colon)
             {
-                *colon = 0;
-                if (is_os_active(line))
+                *colon = 0; // split the string temporarily
+                if (0 == strcmp(line, "linux") || 0 == strcmp(line, "windows") ||
+                    0 == strcmp(line, "macos") || 0 == strcmp(line, "darwin"))
                 {
-                    directive = colon + 1;
-                    while (*directive == ' ')
+                    if (is_os_active(line))
                     {
-                        directive++;
+                        directive = colon + 1;
+                        while (*directive == ' ')
+                        {
+                            directive++;
+                        }
                     }
-                }
-                else if (0 == strcmp(line, "linux") || 0 == strcmp(line, "windows") ||
-                         0 == strcmp(line, "macos"))
-                {
-                    goto next_line;
+                    else
+                    {
+                        // OS specified but not active, skip this directive completely
+                        goto next_line;
+                    }
                 }
                 else
                 {
+                    // Not an OS prefix, restore the colon
                     *colon = ':';
                     directive = line;
                 }
             }
 
+            char *directive_val = NULL;
             // Process Directive
             if (0 == strncmp(directive, "link:", 5))
             {
-                if (strlen(g_link_flags) > 0)
+                directive_val = directive + 5;
+                while (*directive_val == ' ')
                 {
-                    strcat(g_link_flags, " ");
+                    directive_val++;
                 }
-                strcat(g_link_flags, directive + 5);
+                append_flag(g_link_flags, sizeof(g_link_flags), directive_val);
             }
             else if (0 == strncmp(directive, "cflags:", 7))
             {
-                if (strlen(g_cflags) > 0)
+                directive_val = directive + 7;
+                while (*directive_val == ' ')
                 {
-                    strcat(g_cflags, " ");
+                    directive_val++;
                 }
-                strcat(g_cflags, directive + 7);
+                append_flag(g_cflags, sizeof(g_cflags), directive_val);
             }
             else if (0 == strncmp(directive, "include:", 8))
             {
-                char flags[2048];
-                sprintf(flags, "-I%s", directive + 8);
-                if (strlen(g_cflags) > 0)
+                directive_val = directive + 8;
+                while (*directive_val == ' ')
                 {
-                    strcat(g_cflags, " ");
+                    directive_val++;
                 }
-                strcat(g_cflags, flags);
+                char flags[2048];
+                snprintf(flags, sizeof(flags), "-I%s", directive_val);
+                append_flag(g_cflags, sizeof(g_cflags), flags);
             }
             else if (strncmp(directive, "lib:", 4) == 0)
             {
-                char flags[2048];
-                sprintf(flags, "-L%s", directive + 4);
-                if (strlen(g_link_flags) > 0)
+                directive_val = directive + 4;
+                while (*directive_val == ' ')
                 {
-                    strcat(g_link_flags, " ");
+                    directive_val++;
                 }
-                strcat(g_link_flags, flags);
+                char flags[2048];
+                snprintf(flags, sizeof(flags), "-L%s", directive_val);
+                append_flag(g_link_flags, sizeof(g_link_flags), flags);
             }
             else if (strncmp(directive, "framework:", 10) == 0)
             {
-                char flags[2048];
-                sprintf(flags, "-framework %s", directive + 10);
-                if (strlen(g_link_flags) > 0)
+                directive_val = directive + 10;
+                while (*directive_val == ' ')
                 {
-                    strcat(g_link_flags, " ");
+                    directive_val++;
                 }
-                strcat(g_link_flags, flags);
+                char flags[2048];
+                snprintf(flags, sizeof(flags), "-framework %s", directive_val);
+                append_flag(g_link_flags, sizeof(g_link_flags), flags);
             }
             else if (strncmp(directive, "define:", 7) == 0)
             {
-                char flags[2048];
-                sprintf(flags, "-D%s", directive + 7);
-                if (strlen(g_cflags) > 0)
+                directive_val = directive + 7;
+                while (*directive_val == ' ')
                 {
-                    strcat(g_cflags, " ");
+                    directive_val++;
                 }
-                strcat(g_cflags, flags);
+                char flags[2048];
+                snprintf(flags, sizeof(flags), "-D%s", directive_val);
+                append_flag(g_cflags, sizeof(g_cflags), flags);
+
+                if (g_config.cfg_define_count < 64)
+                {
+                    char *name = xstrdup(directive_val);
+                    char *eq = strchr(name, '=');
+                    if (eq)
+                    {
+                        *eq = '\0';
+                    }
+                    g_config.cfg_defines[g_config.cfg_define_count++] = name;
+                }
             }
             else if (0 == strncmp(directive, "shell:", 6))
             {
-                if (system(directive + 6) != 0)
+                directive_val = directive + 6;
+                while (*directive_val == ' ')
                 {
-                    zwarn("Shell directive failed: %s", directive + 6);
+                    directive_val++;
                 }
+                zwarn("Security Alert: Execution of 'shell:' directive (%s) was BLOCKED by default "
+                      "to prevent Remote Code Execution.",
+                      directive_val);
+                // Intentionally ignored system() call for security reasons
             }
             else if (strncmp(directive, "get:", 4) == 0)
             {
@@ -405,82 +394,69 @@ void scan_build_directives(ParserContext *ctx, const char *src)
                 {
                     url++;
                 }
-                char *filename = strrchr(url, '/');
-                if (!filename)
-                {
-                    filename = "downloaded_file";
-                }
-                else
-                {
-                    filename++;
-                }
-                FILE *f = fopen(filename, "r");
-                if (f)
-                {
-                    fclose(f);
-                }
-                else
-                {
-                    char cmd[8192];
-                    if (z_is_windows())
-                    {
-                        sprintf(cmd, "curl -s -L \"%s\" -o \"%s\"", url, filename);
-                    }
-                    else
-                    {
-                        sprintf(cmd, "wget -q \"%s\" -O \"%s\" || curl -s -L \"%s\" -o \"%s\"", url,
-                                filename, url, filename);
-                    }
-                    if (system(cmd) != 0)
-                    {
-                        zwarn("Failed to download %s", url);
-                    }
-                }
+                zwarn("Security Alert: Execution of 'get:' directive (%s) was BLOCKED. Please "
+                      "download external dependencies manually.",
+                      url);
+                // Intentionally ignored external network hit for security reasons
             }
             else if (strncmp(directive, "pkg-config:", 11) == 0)
             {
                 char *libs = directive + 11;
-                char cmd[4096];
-                sprintf(cmd, "pkg-config --cflags %s", libs);
-                FILE *fp = popen(cmd, "r");
-                if (fp)
+
+                // Security check for malicious pkg-config commands containing bash injections
+                int is_safe = 1;
+                for (int i = 0; libs[i]; i++)
                 {
-                    char buf[1024];
-                    if (fgets(buf, sizeof(buf), fp))
+                    if (!isalnum(libs[i]) && libs[i] != '-' && libs[i] != '_' && libs[i] != ' ' &&
+                        libs[i] != '.')
                     {
-                        size_t l = strlen(buf);
-                        if (l > 0 && buf[l - 1] == '\n')
-                        {
-                            buf[l - 1] = 0;
-                        }
-                        if (strlen(g_cflags) > 0)
-                        {
-                            strcat(g_cflags, " ");
-                        }
-                        strcat(g_cflags, buf);
+                        is_safe = 0;
+                        break;
                     }
-                    pclose(fp);
                 }
 
-                sprintf(cmd, "pkg-config --libs %s", libs);
-                fp = popen(cmd, "r");
-                if (fp)
+                if (!is_safe)
                 {
-                    char buf[1024];
-                    if (fgets(buf, sizeof(buf), fp))
+                    zwarn("Security Alert: Execution of 'pkg-config:' directive with invalid chars "
+                          "(%s) was BLOCKED.",
+                          libs);
+                }
+                else
+                {
+                    char cmd[4096];
+                    snprintf(cmd, sizeof(cmd), "pkg-config --cflags %s", libs);
+                    FILE *fp = popen(cmd, "r");
+                    if (fp)
                     {
-                        size_t l = strlen(buf);
-                        if (l > 0 && buf[l - 1] == '\n')
+                        char buf[1024];
+                        if (fgets(buf, sizeof(buf), fp))
                         {
-                            buf[l - 1] = 0;
+                            size_t l = strlen(buf);
+                            if (l > 0 && buf[l - 1] == '\n')
+                            {
+                                buf[l - 1] = 0;
+                            }
+                            append_flag(g_cflags, sizeof(g_cflags), buf);
                         }
-                        if (strlen(g_link_flags) > 0)
-                        {
-                            strcat(g_link_flags, " ");
-                        }
-                        strcat(g_link_flags, buf);
+                        pclose(fp);
                     }
-                    pclose(fp);
+
+                    snprintf(cmd, sizeof(cmd), "pkg-config --libs %s", libs);
+                    fp = popen(cmd, "r");
+                    if (fp)
+                    {
+                        char buf[1024];
+                        if (fgets(buf, sizeof(buf), fp))
+                        {
+                            size_t l = strlen(buf);
+                            if (l > 0 && buf[l - 1] == '\n')
+                            {
+                                buf[l - 1] = 0;
+                            }
+                            append_flag(g_link_flags, sizeof(g_link_flags), buf);
+                        }
+                        pclose(fp);
+                    }
                 }
             }
             else
@@ -543,47 +519,4 @@ int levenshtein(const char *s1, const char *s2)
     }
 
     return matrix[len1][len2];
-}
-
-const char *z_get_temp_dir(void)
-{
-#ifdef _WIN32
-    static char tmp[MAX_PATH_SIZE] = {0};
-    if (tmp[0])
-    {
-        return tmp;
-    }
-
-    if (GetTempPathA(sizeof(tmp), tmp))
-    {
-        // Remove trailing backslash if present
-        int len = strlen(tmp);
-        if (len > 0 && tmp[len - 1] == '\\')
-        {
-            tmp[len - 1] = 0;
-        }
-        return tmp;
-    }
-    return "C:\\Windows\\Temp";
-#else
-    return "/tmp";
-#endif
-}
-
-int z_get_pid(void)
-{
-#ifdef _WIN32
-    return _getpid();
-#else
-    return getpid();
-#endif
-}
-
-int z_isatty(int fd)
-{
-#ifdef _WIN32
-    return _isatty(fd);
-#else
-    return isatty(fd);
-#endif
 }

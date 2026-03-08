@@ -17,10 +17,11 @@ typedef struct ASTNode ASTNode;
  */
 typedef enum
 {
-    LITERAL_INT = 0,    ///< Integer literal.
-    LITERAL_FLOAT = 1,  ///< Floating point literal.
-    LITERAL_STRING = 2, ///< String literal.
-    LITERAL_CHAR = 3    ///< Character literal.
+    LITERAL_INT = 0,       ///< Integer literal.
+    LITERAL_FLOAT = 1,     ///< Floating point literal.
+    LITERAL_STRING = 2,    ///< String literal.
+    LITERAL_CHAR = 3,      ///< Character literal.
+    LITERAL_RAW_STRING = 4 ///< Raw string literal.
 } LiteralKind;
 
 /**
@@ -53,21 +54,22 @@ typedef enum
     TYPE_RUNE,   ///< `rune`.
     TYPE_UINT,   ///< `uint` (alias).
     // Portable C Types (FFI)
-    TYPE_C_INT,    ///< `c_int` (int).
-    TYPE_C_UINT,   ///< `c_uint` (unsigned int).
-    TYPE_C_LONG,   ///< `c_long` (long).
-    TYPE_C_ULONG,  ///< `c_ulong` (unsigned long).
-    TYPE_C_LONG_LONG,   ///< `c_long_long` (long long).
-    TYPE_C_ULONG_LONG,  ///< `c_ulong_long` (unsigned long long).
-    TYPE_C_SHORT,  ///< `c_short` (short).
-    TYPE_C_USHORT, ///< `c_ushort` (unsigned short).
-    TYPE_C_CHAR,   ///< `c_char` (char).
-    TYPE_C_UCHAR,  ///< `c_uchar` (unsigned char).
+    TYPE_C_INT,        ///< `c_int` (int).
+    TYPE_C_UINT,       ///< `c_uint` (unsigned int).
+    TYPE_C_LONG,       ///< `c_long` (long).
+    TYPE_C_ULONG,      ///< `c_ulong` (unsigned long).
+    TYPE_C_LONG_LONG,  ///< `c_long_long` (long long).
+    TYPE_C_ULONG_LONG, ///< `c_ulong_long` (unsigned long long).
+    TYPE_C_SHORT,      ///< `c_short` (short).
+    TYPE_C_USHORT,     ///< `c_ushort` (unsigned short).
+    TYPE_C_CHAR,       ///< `c_char` (char).
+    TYPE_C_UCHAR,      ///< `c_uchar` (unsigned char).
 
     TYPE_STRUCT,   ///< Struct type.
     TYPE_ENUM,     ///< Enum type.
     TYPE_POINTER,  ///< Pointer type (*).
     TYPE_ARRAY,    ///< Fixed size array [N].
+    TYPE_VECTOR,   ///< SIMD vector type.
     TYPE_FUNCTION, ///< Function pointer or reference.
     TYPE_GENERIC,  ///< Generic type parameter (T).
     TYPE_ALIAS,    ///< Opaque type alias.
@@ -174,7 +176,7 @@ typedef enum
     NODE_VA_END,             ///< va_end intrinsic.
     NODE_VA_COPY,            ///< va_copy intrinsic.
     NODE_VA_ARG,             ///< va_arg intrinsic.
-    NODE_COMMENT             ///< Comment node.
+    NODE_AST_COMMENT         ///< Comment node.
 } NodeType;
 
 // ** AST Node Structure **
@@ -200,6 +202,7 @@ struct ASTNode
     Token token;
     Token definition_token; // For LSP: Location where the symbol used in this
                             // node was defined.
+    char *cfg_condition;    // C preprocessor condition from @cfg
 
     union
     {
@@ -217,7 +220,8 @@ struct ASTNode
             ASTNode *body;
             Type **arg_types;
             char **defaults;
-            char **param_names; // Explicit parameter names.
+            ASTNode **default_values; // AST representation (for robust substitution)
+            char **param_names;       // Explicit parameter names.
             int arg_count;
             Type *ret_type_info;
             int is_varargs;
@@ -555,6 +559,7 @@ struct ASTNode
         {
             char *code;
             int is_volatile;
+            int register_size; // The register size to use of 32/64/128 bits
             char **outputs;
             char **output_modes;
             char **inputs;
@@ -576,6 +581,11 @@ struct ASTNode
             char **captured_vars;
             char **captured_types;
             int num_captures;
+            int *capture_modes;
+            int default_capture_mode;
+            char **explicit_captures;
+            int *explicit_capture_modes;
+            int num_explicit_captures;
         } lambda;
 
         struct
@@ -666,6 +676,8 @@ void ast_free(ASTNode *node);
 
 Type *type_new(TypeKind kind);
 Type *type_new_ptr(Type *inner);
+Type *type_new_array(Type *inner, int size);
+Type *type_new_vector(Type *inner, int size);
 int type_eq(Type *a, Type *b);
 int is_integer_type(Type *t);
 int is_float_type(Type *t);

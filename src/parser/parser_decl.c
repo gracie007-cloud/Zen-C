@@ -1,6 +1,7 @@
 
 #include "parser.h"
 #include <ctype.h>
+#include "analysis/const_fold.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,7 @@
 #include "../zen/zen_facts.h"
 #include "zprep_plugin.h"
 #include "../codegen/codegen.h"
+#include "analysis/move_check.h"
 
 ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
 {
@@ -96,14 +98,15 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
 
     enter_scope(ctx);
     char **defaults;
+    ASTNode **default_values;
     int count;
     Type **arg_types;
     char **param_names;
     char **ctype_overrides;
     int is_varargs = 0;
 
-    char *args = parse_and_convert_args(ctx, l, &defaults, &count, &arg_types, &param_names,
-                                        &is_varargs, &ctype_overrides);
+    char *args = parse_and_convert_args(ctx, l, &defaults, &default_values, &count, &arg_types,
+                                        &param_names, &is_varargs, &ctype_overrides);
 
     char *ret = "void";
     Type *ret_type_obj = type_new(TYPE_VOID);
@@ -119,6 +122,10 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
         lexer_next(l);
         ret_type_obj = parse_type_formal(ctx, l);
         ret = type_to_string(ret_type_obj);
+    }
+    else if (lexer_peek(l).type == TOK_COLON)
+    {
+        zpanic_at(lexer_peek(l), "Functions use '->' for the return type, not ':'");
     }
 
     extern char *curr_func_ret;
@@ -144,11 +151,12 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
     }
 
     ASTNode *body = NULL;
-    if (lexer_peek(l).type == TOK_SEMICOLON)
+    Token next_tok = lexer_peek(l);
+    if (next_tok.type == TOK_SEMICOLON)
     {
         lexer_next(l); // consume ;
     }
-    else
+    else if (next_tok.type == TOK_LBRACE)
     {
         // Set self context flags for .member shorthand in methods with self
         int prev_in_method = ctx->in_method_with_self;
@@ -164,6 +172,10 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
         // Restore previous state
         ctx->in_method_with_self = prev_in_method;
         ctx->self_is_pointer = prev_self_ptr;
+    }
+    else
+    {
+        zpanic_at(next_tok, "Expected '{' or ';' after function signature");
     }
 
     // Check for unused parameters
@@ -203,8 +215,10 @@ ASTNode *parse_function(ParserContext *ctx, Lexer *l, int is_async)
     node->func.param_names = param_names;
     node->func.arg_count = count;
     node->func.defaults = defaults;
+    node->func.default_values = default_values;
     node->func.ret_type_info = ret_type_obj;
     node->func.is_varargs = is_varargs;
+    node->func.is_async = is_async;
     node->func.c_type_overrides = ctype_overrides;
 
     if (gen_param)
@@ -765,26 +779,9 @@ ASTNode *parse_var_decl(ParserContext *ctx, Lexer *l)
     n->var_decl.init_expr = init;
 
     // Move Semantics Logic for Initialization
-    check_move_usage(ctx, init, init ? init->token : name_tok);
     if (init && init->type == NODE_EXPR_VAR)
     {
-        Type *t = find_symbol_type_info(ctx, init->var_ref.name);
-        if (!t)
-        {
-            ZenSymbol *s = find_symbol_entry(ctx, init->var_ref.name);
-            if (s)
-            {
-                t = s->type_info;
-            }
-        }
-        if (!is_type_copy(ctx, t))
-        {
-            ZenSymbol *s = find_symbol_entry(ctx, init->var_ref.name);
-            if (s)
-            {
-                s->is_moved = 1;
-            }
-        }
+        // Move semantics placeholder: find_symbol_entry(ctx, init->var_ref.name);
     }
 
     // Global detection: Either no scope (yet) OR root scope (no parent)
@@ -866,36 +863,6 @@ ASTNode *parse_def(ParserContext *ctx, Lexer *l)
     {
         lexer_next(l);
 
-        // Check for constant integer literal
-        if (lexer_peek(l).type == TOK_INT)
-        {
-            Token val_tok = lexer_peek(l);
-            int val = (int)strtol(token_strdup(val_tok), NULL, 0); // support hex/octal
-
-            ZenSymbol *s = find_symbol_entry(ctx, ns);
-            if (s)
-            {
-                s->is_const_value = 1;
-                s->const_int_val = val;
-                s->is_def = 1; // Double ensure
-
-                if (!s->type_name || strcmp(s->type_name, "unknown") == 0)
-                {
-                    if (s->type_name)
-                    {
-                        free(s->type_name);
-                    }
-                    s->type_name = xstrdup("int");
-                    if (s->type_info)
-                    {
-                        free(s->type_info);
-                    }
-                    s->type_info = type_new(TYPE_INT);
-                    s->type_info->is_const = 1;
-                }
-            }
-        }
-
         if (lexer_peek(l).type == TOK_LPAREN && type_str && strncmp(type_str, "Tuple_", 6) == 0)
         {
             char *code = parse_tuple_literal(ctx, l, type_str);
@@ -905,8 +872,38 @@ ASTNode *parse_def(ParserContext *ctx, Lexer *l)
         else
         {
             i = parse_expression(ctx, l);
+
+            // Try to evaluate constant expression for symbol table
+            long long val;
+            if (eval_const_int_expr(i, ctx, &val))
+            {
+                ZenSymbol *s = find_symbol_entry(ctx, ns);
+                if (s)
+                {
+                    s->is_const_value = 1;
+                    s->const_int_val = (int)val;
+                    s->is_def = 1;
+
+                    // Auto-infer type for def if unknown
+                    if (!s->type_name || strcmp(s->type_name, "unknown") == 0)
+                    {
+                        if (s->type_name)
+                        {
+                            free(s->type_name);
+                        }
+                        s->type_name = xstrdup("int");
+                        if (s->type_info)
+                        {
+                            free(s->type_info);
+                        }
+                        s->type_info = type_new(TYPE_INT);
+                        s->type_info->is_const = 1;
+                    }
+                }
+            }
         }
     }
+
     else
     {
         zpanic_at(n, "'def' constants must be initialized");

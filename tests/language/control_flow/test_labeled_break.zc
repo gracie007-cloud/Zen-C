@@ -1,5 +1,5 @@
 
-test "test_labeled_break" -> int {
+test "test_labeled_break" {
     // Test basic goto-based loop exit
     let result = 0;
     

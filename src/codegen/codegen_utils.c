@@ -20,6 +20,19 @@ int loop_defer_boundary[MAX_LOOP_DEPTH];
 int loop_depth = 0;
 int func_defer_boundary = 0;
 
+int pending_closure_frees[MAX_PENDING_CLOSURE_FREES];
+int pending_closure_free_count = 0;
+
+void emit_pending_closure_frees(FILE *out)
+{
+    for (int i = 0; i < pending_closure_free_count; i++)
+    {
+        fprintf(out, "free(_z_closure_ctx_stash[%d]); _z_closure_ctx_stash[%d] = NULL;\n",
+                pending_closure_frees[i], pending_closure_frees[i]);
+    }
+    pending_closure_free_count = 0;
+}
+
 // Strip template suffix from a type name (for example, "MyStruct<T>" -> "MyStruct")
 // Returns newly allocated string, caller must free.
 char *strip_template_suffix(const char *name)
@@ -197,6 +210,47 @@ char *infer_type(ParserContext *ctx, ASTNode *node)
     if (node->resolved_type && strcmp(node->resolved_type, "unknown") != 0 &&
         strcmp(node->resolved_type, "void*") != 0)
     {
+        if (strcmp(node->resolved_type, "c_int") == 0)
+        {
+            return "int";
+        }
+        if (strcmp(node->resolved_type, "c_uint") == 0)
+        {
+            return "unsigned int";
+        }
+        if (strcmp(node->resolved_type, "c_long") == 0)
+        {
+            return "long";
+        }
+        if (strcmp(node->resolved_type, "c_ulong") == 0)
+        {
+            return "unsigned long";
+        }
+        if (strcmp(node->resolved_type, "c_long_long") == 0)
+        {
+            return "long long";
+        }
+        if (strcmp(node->resolved_type, "c_ulong_long") == 0)
+        {
+            return "unsigned long long";
+        }
+        if (strcmp(node->resolved_type, "c_short") == 0)
+        {
+            return "short";
+        }
+        if (strcmp(node->resolved_type, "c_ushort") == 0)
+        {
+            return "unsigned short";
+        }
+        if (strcmp(node->resolved_type, "c_char") == 0)
+        {
+            return "char";
+        }
+        if (strcmp(node->resolved_type, "c_uchar") == 0)
+        {
+            return "unsigned char";
+        }
+
         return node->resolved_type;
     }
 
@@ -272,7 +326,7 @@ char *infer_type(ParserContext *ctx, ASTNode *node)
             if (target_type)
             {
                 char clean_type[256];
-                strcpy(clean_type, target_type);
+                snprintf(clean_type, sizeof(clean_type), "%s", target_type);
                 char *ptr = strchr(clean_type, '*');
                 if (ptr)
                 {
@@ -398,7 +452,7 @@ char *infer_type(ParserContext *ctx, ASTNode *node)
         }
 
         char clean_name[256];
-        strcpy(clean_name, parent_type);
+        snprintf(clean_name, sizeof(clean_name), "%s", parent_type);
         char *ptr = strchr(clean_name, '*');
         if (ptr)
         {
@@ -473,6 +527,24 @@ char *infer_type(ParserContext *ctx, ASTNode *node)
                 strncpy(buf, array_type, len);
                 buf[len] = 0;
                 return buf;
+            }
+
+            if (strncmp(array_type, "Slice_", 6) == 0)
+            {
+                return xstrdup(array_type + 6);
+            }
+
+            char *search_name = array_type;
+            if (strncmp(search_name, "struct ", 7) == 0)
+            {
+                search_name += 7;
+            }
+
+            ASTNode *def = find_struct_def_codegen(ctx, search_name);
+            if (def && def->type_info && def->type_info->kind == TYPE_VECTOR &&
+                def->type_info->inner)
+            {
+                return type_to_string(def->type_info->inner);
             }
         }
         return "int";
@@ -694,6 +766,7 @@ char *replace_string_type(const char *args)
 // Helper to emit auto type or fallback.
 void emit_auto_type(ParserContext *ctx, ASTNode *init_expr, Token t, FILE *out)
 {
+    (void)t;
     char *inferred = NULL;
     if (init_expr)
     {
@@ -706,12 +779,11 @@ void emit_auto_type(ParserContext *ctx, ASTNode *init_expr, Token t, FILE *out)
     }
     else
     {
-        if (strstr(g_config.cc, "tcc"))
+        if (strstr(g_config.cc, "tcc") && init_expr)
         {
-            zpanic_with_suggestion(t,
-                                   "Type inference failed for variable initialization and TCC does "
-                                   "not support __auto_type",
-                                   "Please specify the type explicitly: 'var x: Type = ...'");
+            fprintf(out, "__typeof__((");
+            codegen_expression(ctx, init_expr, out);
+            fprintf(out, "))");
         }
         else
         {
@@ -920,4 +992,26 @@ void codegen_expression_with_move(ParserContext *ctx, ASTNode *node, FILE *out)
         }
     }
     codegen_expression(ctx, node, out);
+}
+
+int is_struct_return_type(const char *ret_type)
+{
+    if (ret_type && strcmp(ret_type, "int") != 0 && strcmp(ret_type, "bool") != 0 &&
+        strcmp(ret_type, "char") != 0 && strcmp(ret_type, "float") != 0 &&
+        strcmp(ret_type, "double") != 0 && strcmp(ret_type, "long") != 0 &&
+        strcmp(ret_type, "usize") != 0 && strcmp(ret_type, "isize") != 0 &&
+        strcmp(ret_type, "byte") != 0 && strcmp(ret_type, "rune") != 0 &&
+        strcmp(ret_type, "size_t") != 0 && strcmp(ret_type, "ptrdiff_t") != 0 &&
+        strcmp(ret_type, "ssize_t") != 0 && strncmp(ret_type, "uint", 4) != 0 &&
+        strncmp(ret_type, "int", 3) != 0 && strncmp(ret_type, "i8", 2) != 0 &&
+        strncmp(ret_type, "u8", 2) != 0 && strncmp(ret_type, "i16", 3) != 0 &&
+        strncmp(ret_type, "u16", 3) != 0 && strncmp(ret_type, "i32", 3) != 0 &&
+        strncmp(ret_type, "u32", 3) != 0 && strncmp(ret_type, "i64", 3) != 0 &&
+        strncmp(ret_type, "u64", 3) != 0 && strncmp(ret_type, "f32", 3) != 0 &&
+        strncmp(ret_type, "f64", 3) != 0 && strncmp(ret_type, "i128", 4) != 0 &&
+        strncmp(ret_type, "u128", 4) != 0)
+    {
+        return 1;
+    }
+    return 0;
 }

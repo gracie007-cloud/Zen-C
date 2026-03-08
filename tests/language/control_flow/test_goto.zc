@@ -1,5 +1,5 @@
 
-test "test_goto" -> int {
+test "test_goto" {
     let x = 0;
     
     goto skip;

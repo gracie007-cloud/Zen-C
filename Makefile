@@ -21,9 +21,13 @@ endif
 # To build with zig:   make CC="zig cc"
 # Version synchronization
 GIT_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.1.0")
-CFLAGS = -Wall -Wextra -g -I./src -I./src/ast -I./src/parser -I./src/codegen -I./plugins -I./src/zen -I./src/utils -I./src/lexer -I./src/analysis -I./src/lsp -I./src/diagnostics -DZEN_VERSION=\"$(GIT_VERSION)\" -DZEN_SHARE_DIR=\"$(SHAREDIR)\"
+CFLAGS = -Wall -Wextra -Wshadow -g -I./src -I./src/ast -I./src/parser -I./src/codegen -I./plugins -I./src/zen -I./src/utils -I./src/lexer -I./src/analysis -I./src/lsp -I./src/diagnostics -I./std/third-party/tre/include -DZEN_VERSION=\"$(GIT_VERSION)\" -DZEN_SHARE_DIR=\"$(SHAREDIR)\"
 TARGET = zc$(EXE)
-LIBS = -lm -lpthread -ldl
+ifeq ($(OS),Windows_NT)
+    LIBS = -lws2_32
+else
+    LIBS = -lm -lpthread -ldl
+endif
 
 SRCS = src/main.c \
        src/parser/parser_core.c \
@@ -40,9 +44,17 @@ SRCS = src/main.c \
        src/codegen/codegen_main.c \
        src/codegen/codegen_utils.c \
        src/utils/utils.c \
+       src/utils/colors.c \
+       src/utils/cmd.c \
+       src/platform/os.c \
+       src/platform/console.c \
+       src/platform/dylib.c \
+       src/utils/config.c \
        src/diagnostics/diagnostics.c \
        src/lexer/token.c \
        src/analysis/typecheck.c \
+       src/analysis/move_check.c \
+       src/analysis/const_fold.c \
        src/lsp/json_rpc.c \
        src/lsp/lsp_main.c \
        src/lsp/lsp_analysis.c \
@@ -52,8 +64,20 @@ SRCS = src/main.c \
        src/lsp/cJSON.c \
        src/zen/zen_facts.c \
        src/repl/repl.c \
-       src/repl/repl_os.c \
-       src/plugins/plugin_manager.c
+       src/plugins/plugin_manager.c \
+       std/third-party/tre/lib/regcomp.c \
+       std/third-party/tre/lib/regerror.c \
+       std/third-party/tre/lib/regexec.c \
+       std/third-party/tre/lib/tre-ast.c \
+       std/third-party/tre/lib/tre-compile.c \
+       std/third-party/tre/lib/tre-filter.c \
+       std/third-party/tre/lib/tre-match-approx.c \
+       std/third-party/tre/lib/tre-match-backtrack.c \
+       std/third-party/tre/lib/tre-match-parallel.c \
+       std/third-party/tre/lib/tre-mem.c \
+       std/third-party/tre/lib/tre-parse.c \
+       std/third-party/tre/lib/tre-stack.c \
+       std/third-party/tre/lib/xmalloc.c
 
 OBJ_DIR = obj
 OBJS = $(patsubst %.c, $(OBJ_DIR)/%.o, $(SRCS))
@@ -148,6 +172,7 @@ install: $(TARGET)
 	# Install facts
 	$(INSTALL) -m 644 src/zen/facts.json $(SHAREDIR)/facts.json
 	$(INSTALL) -m 644 src/repl/docs.json $(SHAREDIR)/docs.json
+	$(INSTALL) -m 644 src/misc/zenc.json $(SHAREDIR)/zenc.json
 	
 	# Install plugin headers
 	$(INSTALL) -d $(INCLUDEDIR)
@@ -197,10 +222,15 @@ clean:
 	@echo "=> Clean complete!"
 
 # Test
+# Supports running specific tests:
+#	make test only="tests/std/test_hash.zc examples/arena_test.zc"
 test: $(TARGET) $(PLUGINS)
-	./tests/scripts/run_tests.sh
-	./tests/scripts/run_codegen_tests.sh
-	./tests/scripts/run_example_transpile.sh
+	./tests/scripts/run_tests.sh -- $(filter %.zc,$(only))
+	./tests/scripts/run_codegen_tests.sh $(filter %.zc,$(only))
+	./tests/scripts/run_example_transpile.sh $(filter %.zc,$(only))
+
+test-tcc: $(TARGET) $(PLUGINS)
+	./tests/scripts/run_tests.sh --cc tcc
 
 test-lsp: $(TARGET)
 	@echo "=> Building LSP Test Runner"
@@ -215,4 +245,16 @@ zig:
 clang:
 	$(MAKE) CC=clang
 
-.PHONY: all clean install uninstall install-ape uninstall-ape test zig clang ape
+windows:
+	$(MAKE) CC="x86_64-w64-mingw32-gcc" TARGET="zc.exe" UI_OS="Windows" LIBS="-static -lm -lpthread"
+
+asan: CFLAGS += -fsanitize=address,undefined -O1 -fno-omit-frame-pointer
+asan: LIBS += -fsanitize=address,undefined
+asan: $(TARGET) $(PLUGINS)
+
+test-asan: clean asan
+	ASAN_OPTIONS=detect_leaks=0 ./tests/scripts/run_tests.sh
+	ASAN_OPTIONS=detect_leaks=0 ./tests/scripts/run_codegen_tests.sh
+	ASAN_OPTIONS=detect_leaks=0 ./tests/scripts/run_example_transpile.sh
+
+.PHONY: all clean install uninstall install-ape uninstall-ape test zig clang ape windows asan test-asan

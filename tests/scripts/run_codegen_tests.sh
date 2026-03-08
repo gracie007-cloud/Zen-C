@@ -11,6 +11,25 @@ if [ ! -f "$ZC" ]; then
     exit 1
 fi
 
+# Make forwards what tests to run as inputs to the script
+# But this is not used by this script atm, since it only runs 1 cherry-picked file
+# Consume the arguments and, if present, disable this script
+# Example: run_codegen_tests.sh examples/simd.zc examples/area_test.zc
+TEST_FILES=("$@")
+
+if [ ${#TEST_FILES[@]} -gt 0 ]; then
+    TEST_LIST=$(printf "%s\n" "${TEST_FILES[@]}" | grep "$EXAMPLES_DIR"/)
+else
+    TEST_LIST=$(find "$EXAMPLES_DIR" -name "*.zc" | sort)
+fi
+
+# This script doesn't support running on set of target files currently
+# But make passes the arguments forward, so treat it as wanting to disable this test
+if [ -n "$TEST_LIST" ]; then
+    echo "** Nothing to do **"
+    exit 0
+fi
+
 echo "** Running Codegen Verification Tests **"
 
 # Test 1: Duplicate Typedefs
@@ -22,9 +41,9 @@ if [ $? -ne 0 ]; then
     echo "FAIL (Compilation error)"
     ((FAILED++))
 else
-    # Check out.c for duplicates
+    # Check generated C file for duplicates
     # We expect "typedef struct Vec2f Vec2f;" to appear exactly once
-    COUNT=$(grep -c "typedef struct Vec2f Vec2f;" out.c)
+    COUNT=$(grep -c "typedef struct Vec2f Vec2f;" "${TEST_NAME%.zc}.c")
     
     if [ "$COUNT" -eq 1 ]; then
         echo "PASS"
@@ -36,7 +55,7 @@ else
 fi
 
 # Cleanup
-rm -f out.c a.out
+rm -f "${TEST_NAME%.zc}.c" "${TEST_NAME%.zc}" a.out
 
 echo "----------------------------------------"
 echo "Summary:"

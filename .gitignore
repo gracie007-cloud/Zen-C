@@ -8,6 +8,7 @@ a.out
 *.dll
 *.dylib
 *.a
+*.so.dSYM/
 .vscode/
 .idea/
 *.swp
@@ -23,3 +24,5 @@ out/
 docs/html/
 docs/latex/
 *.db
+build_dir_env.txt 
+build_dir_linux.txt

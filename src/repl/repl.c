@@ -2,7 +2,7 @@
 #include "ast.h"
 #include "parser/parser.h"
 #include "zprep.h"
-#include "repl_os.h"
+#include "../platform/os.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1175,7 +1175,7 @@ void run_repl(const char *self_path)
         }
         else
         {
-            strcpy(prompt_text, "\033[1;32m>>>\033[0m ");
+            snprintf(prompt_text, sizeof(prompt_text), "\033[1;32m>>>\033[0m ");
         }
 
         const char *prompt = (brace_depth > 0 || paren_depth > 0) ? "... " : prompt_text;
@@ -1195,7 +1195,7 @@ void run_repl(const char *self_path)
         {
             size_t cmd_len = strlen(line_buf);
             char cmd_buf[1024];
-            strcpy(cmd_buf, line_buf);
+            snprintf(cmd_buf, sizeof(cmd_buf), "%s", line_buf);
             if (cmd_len > 0 && cmd_buf[cmd_len - 1] == '\n')
             {
                 cmd_buf[--cmd_len] = 0;
@@ -1304,7 +1304,7 @@ void run_repl(const char *self_path)
                         show_code_size += strlen(history[i]) + 2;
                     }
                     char *show_code = malloc(show_code_size);
-                    strcpy(show_code, "");
+                    show_code[0] = '\0';
                     for (int i = 0; i < history_len; i++)
                     {
                         strcat(show_code, history[i]);
@@ -1739,20 +1739,21 @@ void run_repl(const char *self_path)
                         }
 
                         // Generate probe code to print values
-                        char *global_code = NULL;
-                        char *main_code = NULL;
-                        repl_get_code(history, history_len, &global_code, &main_code);
+                        char *probe_global_code = NULL;
+                        char *probe_main_code = NULL;
+                        repl_get_code(history, history_len, &probe_global_code, &probe_main_code);
 
                         // Generate probe code to print values
-                        size_t probe_size = strlen(global_code) + strlen(main_code) + 4096;
+                        size_t probe_size =
+                            strlen(probe_global_code) + strlen(probe_main_code) + 4096;
                         char *probe_code = malloc(probe_size);
 
                         sprintf(probe_code,
                                 "%s\nfn main() { _z_suppress_stdout(); %s _z_restore_stdout(); "
                                 "printf(\"Variables:\\n\"); ",
-                                global_code, main_code);
-                        free(global_code);
-                        free(main_code);
+                                probe_global_code, probe_main_code);
+                        free(probe_global_code);
+                        free(probe_main_code);
 
                         int found_vars = 0;
                         if (main_func && main_func->func.body &&
@@ -1771,19 +1772,51 @@ void run_repl(const char *self_path)
 
                                     if (s->var_decl.type_str)
                                     {
-                                        if (strcmp(t, "int") == 0 || strcmp(t, "i32") == 0)
+                                        if (strcmp(t, "int") == 0 || strcmp(t, "i32") == 0 ||
+                                            strcmp(t, "I32") == 0 || strcmp(t, "int32_t") == 0 ||
+                                            strcmp(t, "i16") == 0 || strcmp(t, "I16") == 0 ||
+                                            strcmp(t, "int16_t") == 0 || strcmp(t, "i8") == 0 ||
+                                            strcmp(t, "I8") == 0 || strcmp(t, "int8_t") == 0 ||
+                                            strcmp(t, "short") == 0 || strcmp(t, "rune") == 0)
                                         {
                                             strcpy(fmt, "%d");
                                             strcpy(val_expr, s->var_decl.name);
                                         }
-                                        else if (strcmp(t, "i64") == 0)
+                                        else if (strcmp(t, "uint") == 0 || strcmp(t, "u32") == 0 ||
+                                                 strcmp(t, "U32") == 0 ||
+                                                 strcmp(t, "uint32_t") == 0 ||
+                                                 strcmp(t, "u16") == 0 || strcmp(t, "U16") == 0 ||
+                                                 strcmp(t, "uint16_t") == 0 ||
+                                                 strcmp(t, "u8") == 0 || strcmp(t, "U8") == 0 ||
+                                                 strcmp(t, "uint8_t") == 0 ||
+                                                 strcmp(t, "byte") == 0 || strcmp(t, "ushort") == 0)
+                                        {
+                                            strcpy(fmt, "%u");
+                                            strcpy(val_expr, s->var_decl.name);
+                                        }
+                                        else if (strcmp(t, "i64") == 0 || strcmp(t, "I64") == 0 ||
+                                                 strcmp(t, "int64_t") == 0 ||
+                                                 strcmp(t, "long") == 0 ||
+                                                 strcmp(t, "isize") == 0 ||
+                                                 strcmp(t, "ptrdiff_t") == 0)
                                         {
                                             strcpy(fmt, "%ld");
                                             sprintf(val_expr, "(long)%s", s->var_decl.name);
                                         }
+                                        else if (strcmp(t, "u64") == 0 || strcmp(t, "U64") == 0 ||
+                                                 strcmp(t, "uint64_t") == 0 ||
+                                                 strcmp(t, "ulong") == 0 ||
+                                                 strcmp(t, "usize") == 0 ||
+                                                 strcmp(t, "size_t") == 0)
+                                        {
+                                            strcpy(fmt, "%lu");
+                                            sprintf(val_expr, "(unsigned long)%s",
+                                                    s->var_decl.name);
+                                        }
                                         else if (strcmp(t, "float") == 0 ||
                                                  strcmp(t, "double") == 0 ||
-                                                 strcmp(t, "f32") == 0 || strcmp(t, "f64") == 0)
+                                                 strcmp(t, "f32") == 0 || strcmp(t, "f64") == 0 ||
+                                                 strcmp(t, "F32") == 0 || strcmp(t, "F64") == 0)
                                         {
                                             strcpy(fmt, "%f");
                                             strcpy(val_expr, s->var_decl.name);
@@ -2051,24 +2084,24 @@ void run_repl(const char *self_path)
                         continue;
                     }
                     char *expr_buf = malloc(8192);
-                    strcpy(expr_buf, cmd_buf + 3);
+                    snprintf(expr_buf, 8192, "%s", cmd_buf + 3);
 
-                    int brace_depth = 0;
+                    int cmd_brace_depth = 0;
                     for (char *p = expr_buf; *p; p++)
                     {
                         if (*p == '{')
                         {
-                            brace_depth++;
+                            cmd_brace_depth++;
                         }
                         else if (*p == '}')
                         {
-                            brace_depth--;
+                            cmd_brace_depth--;
                         }
                     }
 
-                    while (brace_depth > 0)
+                    while (cmd_brace_depth > 0)
                     {
-                        char *more = repl_readline("... ", history, history_len, brace_depth);
+                        char *more = repl_readline("... ", history, history_len, cmd_brace_depth);
                         if (!more)
                         {
                             break;
@@ -2079,11 +2112,11 @@ void run_repl(const char *self_path)
                         {
                             if (*p == '{')
                             {
-                                brace_depth++;
+                                cmd_brace_depth++;
                             }
                             else if (*p == '}')
                             {
-                                brace_depth--;
+                                cmd_brace_depth--;
                             }
                         }
                         free(more);
@@ -2273,7 +2306,7 @@ void run_repl(const char *self_path)
 
             size_t len = strlen(line_buf);
             input_buffer = realloc(input_buffer, input_len + len + 1);
-            strcpy(input_buffer + input_len, line_buf);
+            snprintf(input_buffer + input_len, input_len + sizeof(line_buf), "%s", line_buf);
             input_len += len;
 
             if (brace_depth > 0 || paren_depth > 0)
@@ -2331,7 +2364,7 @@ void run_repl(const char *self_path)
                 char *last_line = history[history_len - 1];
 
                 char *check_buf = malloc(strlen(last_line) + 2);
-                strcpy(check_buf, last_line);
+                snprintf(check_buf, strlen(last_line) + 2, "%s", last_line);
                 strcat(check_buf, ";");
 
                 ParserContext ctx = {0};
@@ -2362,18 +2395,18 @@ void run_repl(const char *self_path)
 
                 if (is_expr)
                 {
-                    char *global_code = NULL;
-                    char *main_code = NULL;
-                    repl_get_code(history, history_len - 1, &global_code, &main_code);
+                    char *probe_global_code = NULL;
+                    char *probe_main_code = NULL;
+                    repl_get_code(history, history_len - 1, &probe_global_code, &probe_main_code);
 
-                    size_t probesz =
-                        strlen(global_code) + strlen(main_code) + strlen(last_line) + 4096;
+                    size_t probesz = strlen(probe_global_code) + strlen(probe_main_code) +
+                                     strlen(last_line) + 4096;
                     char *probe_code = malloc(probesz);
 
-                    sprintf(probe_code, "%s\nfn main() { _z_suppress_stdout(); %s", global_code,
-                            main_code);
-                    free(global_code);
-                    free(main_code);
+                    sprintf(probe_code, "%s\nfn main() { _z_suppress_stdout(); %s",
+                            probe_global_code, probe_main_code);
+                    free(probe_global_code);
+                    free(probe_main_code);
 
                     strcat(probe_code, " raw { typedef struct { int _u; } __REVEAL_TYPE__; } ");
                     strcat(probe_code, " var _z_type_probe: __REVEAL_TYPE__; _z_type_probe = (");

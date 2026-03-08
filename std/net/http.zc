@@ -16,27 +16,18 @@ fn _parse_headers(lines: Vec<String>, start_idx: usize) -> Vec<Header> {
     let headers = Vec<Header>::new();
     let len = lines.len;
     for (let i = start_idx; i < len; i = i + 1) {
-        let line = lines.get(i);
+        let line = lines.get_ref(i);
         if (line.is_empty()) break; // End of headers
         
         let parts = line.split(':');
         if (parts.len >= 2) {
-            let key = parts.get(0);
-            let val = parts.get(1); // TODO: Join rest if multiple ':'?
-            // Trim
+            let key = parts.get_ref(0);
+            let val = parts.get_ref(1); // TODO: Join rest if multiple ':'?
             let key_t = key.trim();
             let val_t = val.trim();
             headers.push(Header { key: key_t, value: val_t });
-            
-            // Cleanup split parts (copies)
-            key.free();
         }
-        // Free parts loop?
-        for (let j = 0; j < parts.len; j = j + 1) {
-            let p = parts.get(j);
-            p.free();
-        }
-        parts.free();
+        // strings in `parts` will auto-drop since their `Vec`s will auto-drop.
     }
     return headers;
 }
@@ -56,20 +47,6 @@ impl Request {
             headers: Vec<Header>::new(),
             body: String::new("")
         };
-    }
-    
-    fn destroy(self) {
-        self.method.free();
-        self.path.free();
-        
-        let len = self.headers.len;
-        for (let i = 0; i < len; i = i + 1) {
-            let h = self.headers.get(i);
-            h.key.free();
-            h.value.free();
-        }
-        self.headers.free();
-        self.body.free();
     }
 }
 
@@ -105,20 +82,10 @@ impl Response {
         self.body = body;
     }
 
+    // body free is allowed here because reassignment leaks in Zen C without it
     fn set_body_str(self, body: char*) {
         self.body.free();
         self.body = String::new(body);
-    }
-    
-    fn destroy(self) {
-        let len = self.headers.len;
-        for (let i = 0; i < len; i = i + 1) {
-            let h = self.headers.get(i);
-            h.key.free();
-            h.value.free();
-        }
-        self.headers.free();
-        self.body.free();
     }
 }
 
@@ -164,11 +131,11 @@ impl Server {
                      // Parse Request
                      let lines = req_str.split('\n');
                      if (lines.len > 0) {
-                         let first_line = lines.get(0);
+                         let first_line = lines.get_ref(0);
                          let fl_parts = first_line.split(' ');
                          if (fl_parts.len >= 2) {
-                             let method = fl_parts.get(0).trim();
-                             let path = fl_parts.get(1).trim();
+                             let method = fl_parts.get_ref(0).trim();
+                             let path = fl_parts.get_ref(1).trim();
                              
                              let req = Request::new(method, path);
                              let res = Response::new(200);
@@ -186,7 +153,7 @@ impl Server {
                              
                              // Headers
                              for (let i = 0; i < res.headers.len; i = i + 1) {
-                                 let header = res.headers.get(i);
+                                 let header = res.headers.get_ref(i);
                                  response_str.append(&header.key);
                                  response_str.append_c(": ");
                                  response_str.append(&header.value);
@@ -205,20 +172,10 @@ impl Server {
                              response_str.append(&res.body);
                              
                              client.write((u8*)response_str.c_str(), response_str.length());
-                             
-                             response_str.free();
-                             res.destroy();
-                             req.destroy();
-                             
-                             // Clean up fl_parts
-                             for(let k=0; k<fl_parts.len; k=k+1) fl_parts.get(k).free();
-                             fl_parts.free();
                          }
-                         // Clean up lines
-                         for(let k=0; k<lines.len; k=k+1) lines.get(k).free();
-                         lines.free();
+                         // fl_parts auto-drops its strings.
                      }
-                     req_str.free();
+                     // lines auto-drops its strings.
                 }
             }
             client.close();
@@ -231,6 +188,7 @@ import "./url.zc"
 import "./dns.zc"
 
 extern fn atoi(s: const char*) -> int;
+extern fn strstr(haystack: const char*, needle: const char*) -> char*;
 
 fn fetch(url: String) -> Response {
     let u_res = Url::parse(url);
@@ -243,7 +201,6 @@ fn fetch(url: String) -> Response {
     
     if (!u.scheme.eq_str("http")) {
         println "Only http:// supported";
-        u.destroy();
         return Response::new(0);
     }
     
@@ -258,12 +215,7 @@ fn fetch(url: String) -> Response {
     if (dns_res.is_ok()) {
         host_ip.free();
         host_ip = dns_res.unwrap();
-    } 
-    // If DNS failed, we keep usage of u.host as is (maybe it is IP literal? Dns::resolve might fail on literals on some systems? 
-    // Actually getaddrinfo handles literals too if AI_NUMERICHOST or just standard behavior).
-    // Our Dns::resolve wrapper returns error if getaddrinfo fails.
-    // So if it fails, we trust the original string?
-    // Let's rely on Dns::resolve success for now, or fallback.
+    }
     
     let ip_str = host_ip.c_str();
     
@@ -271,8 +223,6 @@ fn fetch(url: String) -> Response {
     let stream_res = TcpStream::connect(ip_str, u.port);
     if (stream_res.is_err()) {
         println "Failed to connect to {u.host.c_str()}:{u.port} ({ip_str})";
-        host_ip.free();
-        u.destroy();
         return Response::new(0);
     }
     
@@ -293,9 +243,6 @@ fn fetch(url: String) -> Response {
     req_line.append_c("\r\nConnection: close\r\n\r\n");
     
     stream.write((u8*)req_line.c_str(), req_line.length());
-    req_line.free();
-    host_ip.free();
-    u.destroy();
     
 
     
@@ -331,11 +278,9 @@ fn fetch(url: String) -> Response {
             let ss = second_space.unwrap();
             let code_str = rest_line.substring(0, ss);
             status = atoi(code_str.c_str());
-            code_str.free();
         } else {
              status = atoi(rest_line.c_str());
         }
-        rest_line.free();
     }
     
     let res = Response::new(status);
@@ -350,7 +295,6 @@ fn fetch(url: String) -> Response {
         res.set_body(body_content);
     }
     
-    raw_res.free();
     stream.close();
     
     return res;

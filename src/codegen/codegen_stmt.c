@@ -72,7 +72,7 @@ static void emit_single_pattern_cond(const char *pat, int id, int is_ptr, FILE *
     }
     else
     {
-        // Numeric, Char literal (removed duplicate branch), or simple pattern
+        // Numeric, Char literal, or simple pattern
         if (is_ptr)
         {
             fprintf(out, "*_m_%d == %s", id, pat);
@@ -149,6 +149,47 @@ static void emit_pattern_condition(ParserContext *ctx, const char *pattern, int 
     }
 }
 
+// Helper
+static bool is_int_type(TypeKind k)
+{
+    switch (k)
+    {
+    case TYPE_CHAR:
+    case TYPE_I8:
+    case TYPE_U8:
+    case TYPE_I16:
+    case TYPE_U16:
+    case TYPE_I32:
+    case TYPE_U32:
+    case TYPE_I64:
+    case TYPE_U64:
+    case TYPE_I128:
+    case TYPE_U128:
+    case TYPE_INT:
+    case TYPE_UINT:
+    case TYPE_USIZE:
+    case TYPE_ISIZE:
+    case TYPE_BYTE:
+    case TYPE_RUNE:
+    case TYPE_ENUM:
+    case TYPE_C_INT:
+    case TYPE_C_UINT:
+    case TYPE_C_LONG:
+    case TYPE_C_ULONG:
+    case TYPE_C_LONG_LONG:
+    case TYPE_C_ULONG_LONG:
+    case TYPE_C_SHORT:
+    case TYPE_C_USHORT:
+    case TYPE_C_CHAR:
+    case TYPE_C_UCHAR:
+    case TYPE_BITINT:
+    case TYPE_UBITINT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 void codegen_match_internal(ParserContext *ctx, ASTNode *node, FILE *out, int use_result)
 {
     int id = tmp_counter++;
@@ -158,7 +199,14 @@ void codegen_match_internal(ParserContext *ctx, ASTNode *node, FILE *out, int us
     char *ret_type = infer_type(ctx, node);
     int is_expr = (use_result && ret_type && strcmp(ret_type, "void") != 0);
 
-    fprintf(out, "({ ");
+    if (is_expr)
+    {
+        fprintf(out, "({ ");
+    }
+    else
+    {
+        fprintf(out, "{ ");
+    }
 
     // Check if any case uses ref binding - only take address if needed
     int has_ref_binding = 0;
@@ -189,16 +237,17 @@ void codegen_match_internal(ParserContext *ctx, ASTNode *node, FILE *out, int us
 
     if (is_self)
     {
-        fprintf(out, "ZC_AUTO _m_%d = ", id);
+        emit_auto_type(ctx, node->match_stmt.expr, node->token, out);
+        fprintf(out, " _m_%d = ", id);
         codegen_expression(ctx, node->match_stmt.expr, out);
         fprintf(out, "; ");
     }
     else if (has_ref_binding && is_lvalue_opt)
     {
         // Take address for ref bindings
-        fprintf(out, "ZC_AUTO _m_%d = &", id);
+        fprintf(out, "ZC_AUTO_INIT(_m_%d, &", id);
         codegen_expression(ctx, node->match_stmt.expr, out);
-        fprintf(out, "; ");
+        fprintf(out, "); ");
     }
     else if (has_ref_binding)
     {
@@ -206,12 +255,15 @@ void codegen_match_internal(ParserContext *ctx, ASTNode *node, FILE *out, int us
         emit_auto_type(ctx, node->match_stmt.expr, node->token, out);
         fprintf(out, " _temp_%d = ", id);
         codegen_expression(ctx, node->match_stmt.expr, out);
-        fprintf(out, "; ZC_AUTO _m_%d = &_temp_%d; ", id, id);
+        fprintf(out, "; ");
+
+        fprintf(out, "ZC_AUTO_INIT(_m_%d, &_temp_%d); ", id, id);
     }
     else
     {
         // No ref bindings: store value directly (not pointer)
-        fprintf(out, "ZC_AUTO _m_%d = ", id);
+        emit_auto_type(ctx, node->match_stmt.expr, node->token, out);
+        fprintf(out, " _m_%d = ", id);
         codegen_expression(ctx, node->match_stmt.expr, out);
         fprintf(out, "; ");
     }
@@ -332,31 +384,17 @@ void codegen_match_internal(ParserContext *ctx, ASTNode *node, FILE *out, int us
 
                 if (is_option)
                 {
-                    if (strstr(g_config.cc, "tcc"))
+                    if (is_r)
                     {
-                        if (is_r)
-                        {
-                            fprintf(out, "__typeof__(&_m_%d.val) %s = &_m_%d.val; ", id, bname, id);
-                        }
-                        else
-                        {
-                            fprintf(out, "__typeof__(_m_%d.val) %s = _m_%d.val; ", id, bname, id);
-                        }
+                        fprintf(out, "ZC_AUTO_INIT(%s, &_m_%d->val); ", bname, id);
+                    }
+                    else if (has_ref_binding)
+                    {
+                        fprintf(out, "ZC_AUTO_INIT(%s, _m_%d->val); ", bname, id);
                     }
                     else
                     {
-                        if (is_r)
-                        {
-                            fprintf(out, "ZC_AUTO %s = &_m_%d->val; ", bname, id);
-                        }
-                        else if (has_ref_binding)
-                        {
-                            fprintf(out, "ZC_AUTO %s = _m_%d->val; ", bname, id);
-                        }
-                        else
-                        {
-                            fprintf(out, "ZC_AUTO %s = _m_%d.val; ", bname, id);
-                        }
+                        fprintf(out, "ZC_AUTO_INIT(%s, _m_%d.val); ", bname, id);
                     }
                 }
                 else if (is_result)
@@ -367,33 +405,17 @@ void codegen_match_internal(ParserContext *ctx, ASTNode *node, FILE *out, int us
                         field = "err";
                     }
 
-                    if (strstr(g_config.cc, "tcc"))
+                    if (is_r)
                     {
-                        if (is_r)
-                        {
-                            fprintf(out, "__typeof__(&_m_%d->%s) %s = &_m_%d->%s; ", id, field,
-                                    bname, id, field);
-                        }
-                        else
-                        {
-                            fprintf(out, "__typeof__(_m_%d->%s) %s = _m_%d->%s; ", id, field, bname,
-                                    id, field);
-                        }
+                        fprintf(out, "ZC_AUTO_INIT(%s, &_m_%d->%s); ", bname, id, field);
+                    }
+                    else if (has_ref_binding)
+                    {
+                        fprintf(out, "ZC_AUTO_INIT(%s, _m_%d->%s); ", bname, id, field);
                     }
                     else
                     {
-                        if (is_r)
-                        {
-                            fprintf(out, "ZC_AUTO %s = &_m_%d->%s; ", bname, id, field);
-                        }
-                        else if (has_ref_binding)
-                        {
-                            fprintf(out, "ZC_AUTO %s = _m_%d->%s; ", bname, id, field);
-                        }
-                        else
-                        {
-                            fprintf(out, "ZC_AUTO %s = _m_%d.%s; ", bname, id, field);
-                        }
+                        fprintf(out, "ZC_AUTO_INIT(%s, _m_%d.%s); ", bname, id, field);
                     }
                 }
                 else
@@ -413,15 +435,16 @@ void codegen_match_internal(ParserContext *ctx, ASTNode *node, FILE *out, int us
                         // Tuple destructuring: data.Variant.vI
                         if (is_r)
                         {
-                            fprintf(out, "ZC_AUTO %s = &_m_%d->data.%s.v%d; ", bname, id, v, i);
+                            fprintf(out, "ZC_AUTO_INIT(%s, &_m_%d->data.%s.v%d); ", bname, id, v,
+                                    i);
                         }
                         else if (has_ref_binding)
                         {
-                            fprintf(out, "ZC_AUTO %s = _m_%d->data.%s.v%d; ", bname, id, v, i);
+                            fprintf(out, "ZC_AUTO_INIT(%s, _m_%d->data.%s.v%d); ", bname, id, v, i);
                         }
                         else
                         {
-                            fprintf(out, "ZC_AUTO %s = _m_%d.data.%s.v%d; ", bname, id, v, i);
+                            fprintf(out, "ZC_AUTO_INIT(%s, _m_%d.data.%s.v%d); ", bname, id, v, i);
                         }
                     }
                     else
@@ -429,15 +452,15 @@ void codegen_match_internal(ParserContext *ctx, ASTNode *node, FILE *out, int us
                         // Single destructuring: data.Variant
                         if (is_r)
                         {
-                            fprintf(out, "ZC_AUTO %s = &_m_%d->data.%s; ", bname, id, v);
+                            fprintf(out, "ZC_AUTO_INIT(%s, &_m_%d->data.%s); ", bname, id, v);
                         }
                         else if (has_ref_binding)
                         {
-                            fprintf(out, "ZC_AUTO %s = _m_%d->data.%s; ", bname, id, v);
+                            fprintf(out, "ZC_AUTO_INIT(%s, _m_%d->data.%s); ", bname, id, v);
                         }
                         else
                         {
-                            fprintf(out, "ZC_AUTO %s = _m_%d.data.%s; ", bname, id, v);
+                            fprintf(out, "ZC_AUTO_INIT(%s, _m_%d.data.%s); ", bname, id, v);
                         }
                     }
                 }
@@ -508,7 +531,7 @@ void codegen_match_internal(ParserContext *ctx, ASTNode *node, FILE *out, int us
     }
     else
     {
-        fprintf(out, " })");
+        fprintf(out, " }");
     }
 }
 void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
@@ -519,7 +542,7 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
     }
     switch (node->type)
     {
-    case NODE_COMMENT:
+    case NODE_AST_COMMENT:
         fprintf(out, "%s\n", node->comment.content);
         break;
     case NODE_MATCH:
@@ -569,14 +592,10 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
             // Determine mechanism: struct/large-type? -> malloc; primitive -> cast
             int returns_struct = 0;
             char *rt = node->func.ret_type;
-            if (strcmp(rt, "void") != 0 && strcmp(rt, "Async") != 0)
+            if (strstr(rt, "*") == NULL && strcmp(rt, "string") != 0 && strcmp(rt, "void") != 0 &&
+                strcmp(rt, "Async") != 0)
             {
-                if (strstr(rt, "*") == NULL && strcmp(rt, "string") != 0 &&
-                    strcmp(rt, "int") != 0 && strcmp(rt, "bool") != 0 && strcmp(rt, "char") != 0 &&
-                    strcmp(rt, "float") != 0 && strcmp(rt, "double") != 0 &&
-                    strcmp(rt, "long") != 0 && strcmp(rt, "usize") != 0 &&
-                    strcmp(rt, "isize") != 0 && strncmp(rt, "uint", 4) != 0 &&
-                    strncmp(rt, "int", 3) != 0)
+                if (is_struct_return_type(rt))
                 {
                     returns_struct = 1;
                 }
@@ -611,7 +630,7 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
             }
             else if (strcmp(rt, "void") != 0)
             {
-                fprintf(out, "    return (void*)(long)res;\n");
+                fprintf(out, "    return (void*)(uintptr_t)res;\n");
             }
             else
             {
@@ -768,6 +787,8 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
             {
                 // Check if type implements Drop
                 int has_drop = 0;
+                char *drop_type_name = NULL;
+
                 if (arg_type->kind == TYPE_STRUCT && arg_type->name)
                 {
                     ASTNode *def = find_struct_def(ctx, arg_type->name);
@@ -775,20 +796,25 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
                         def->type_info->traits.has_drop)
                     {
                         has_drop = 1;
-                    }
-                    else if (def)
-                    {
-                        // No drop needed
-                    }
-                    else
-                    {
-                        // No struct def found
+                        drop_type_name = arg_type->name;
                     }
                 }
 
                 if (has_drop)
                 {
                     fprintf(out, "    int __z_drop_flag_%s = 1;\n", arg_name);
+
+                    ASTNode *defer_node = xmalloc(sizeof(ASTNode));
+                    defer_node->type = NODE_RAW_STMT;
+                    char *stmt_str = xmalloc(256 + strlen(arg_name) * 2 + strlen(drop_type_name));
+                    sprintf(stmt_str, "if (__z_drop_flag_%s) %s__Drop_glue(&%s);", arg_name,
+                            drop_type_name, arg_name);
+                    defer_node->raw_stmt.content = stmt_str;
+
+                    if (defer_count < MAX_DEFER)
+                    {
+                        defer_stack[defer_count++] = defer_node;
+                    }
                 }
             }
         }
@@ -831,14 +857,6 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
         g_current_impl_type = node->impl_trait.target_type;
         codegen_walker(ctx, node->impl_trait.methods, out);
 
-        if (strcmp(node->impl_trait.trait_name, "Drop") == 0)
-        {
-            char *tname = node->impl_trait.target_type;
-            fprintf(out, "\n// RAII Glue\n");
-            fprintf(out, "void %s__Drop_glue(%s *self) {\n", tname, tname);
-            fprintf(out, "    %s__Drop_drop(self);\n", tname);
-            fprintf(out, "}\n");
-        }
         g_current_impl_type = NULL;
         break;
     case NODE_DESTRUCT_VAR:
@@ -948,6 +966,38 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
         break;
     }
     case NODE_VAR_DECL:
+    {
+        // Save pending closure free count — if the init expr creates a closure,
+        // the variable takes ownership and we should NOT free the context.
+        int saved_closure_frees = pending_closure_free_count;
+
+        if (strcmp(node->var_decl.name, "_") == 0 && node->var_decl.init_expr)
+        {
+            int is_void = 0;
+            if (node->type_info && node->type_info->kind == TYPE_VOID)
+            {
+                is_void = 1;
+            }
+            else if (node->var_decl.type_str && strcmp(node->var_decl.type_str, "void") == 0)
+            {
+                is_void = 1;
+            }
+            else if (!node->type_info && !node->var_decl.type_str)
+            {
+                char *ret_type = infer_type(ctx, node->var_decl.init_expr);
+                if (!ret_type || strcmp(ret_type, "void") == 0)
+                {
+                    is_void = 1;
+                }
+            }
+            if (is_void)
+            {
+                fprintf(out, "    ");
+                codegen_expression(ctx, node->var_decl.init_expr, out);
+                fprintf(out, ";\n");
+                break;
+            }
+        }
         fprintf(out, "    ");
         if (node->var_decl.is_static)
         {
@@ -1010,12 +1060,29 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
                     fprintf(out, " = ");
                     codegen_expression(ctx, node->var_decl.init_expr, out);
                 }
-                else if (node->type_info && (node->type_info->kind == TYPE_ARRAY ||
-                                             node->type_info->kind == TYPE_STRUCT ||
-                                             node->type_info->kind == TYPE_BOOL))
+                else if (node->type_info)
                 {
-                    // Zero initialize arrays and structs by default so we don't have garbage
-                    fprintf(out, " = {0}");
+                    TypeKind k = node->type_info->kind;
+                    if (k == TYPE_ARRAY || k == TYPE_STRUCT)
+                    {
+                        fprintf(out, " = %s", g_config.use_cpp ? "{}" : "{0}");
+                    }
+                    else if (is_int_type(k))
+                    {
+                        fprintf(out, " = 0");
+                    }
+                    else if (k == TYPE_F32 || k == TYPE_FLOAT)
+                    {
+                        fprintf(out, " = 0.0f");
+                    }
+                    else if (k == TYPE_F64)
+                    {
+                        fprintf(out, " = 0.0");
+                    }
+                    else if (k == TYPE_BOOL)
+                    {
+                        fprintf(out, " = false");
+                    }
                 }
                 fprintf(out, ";\n");
                 if (node->var_decl.init_expr &&
@@ -1105,7 +1172,11 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
                 }
             }
         }
+
+        // Suppress pending frees - variable owns the closure context
+        pending_closure_free_count = saved_closure_frees;
         break;
+    }
     case NODE_CONST:
         fprintf(out, "    const ");
         if (node->var_decl.type_str)
@@ -1198,12 +1269,12 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
         fprintf(out, "; ");
         if (node->for_stmt.condition)
         {
-            codegen_expression(ctx, node->for_stmt.condition, out);
+            codegen_expression_bare(ctx, node->for_stmt.condition, out);
         }
         fprintf(out, "; ");
         if (node->for_stmt.step)
         {
-            codegen_expression(ctx, node->for_stmt.step, out);
+            codegen_expression_bare(ctx, node->for_stmt.step, out);
         }
         fprintf(out, ") ");
         codegen_node_single(ctx, node->for_stmt.body, out);
@@ -1310,13 +1381,27 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
             fprintf(out, "ZC_AUTO %s = ", node->for_range.var_name);
         }
         codegen_expression(ctx, node->for_range.start, out);
-        if (node->for_range.is_inclusive)
+        if (node->for_range.step && node->for_range.step[0] == '-')
         {
-            fprintf(out, "; %s <= ", node->for_range.var_name);
+            if (node->for_range.is_inclusive)
+            {
+                fprintf(out, "; %s >= ", node->for_range.var_name);
+            }
+            else
+            {
+                fprintf(out, "; %s > ", node->for_range.var_name);
+            }
         }
         else
         {
-            fprintf(out, "; %s < ", node->for_range.var_name);
+            if (node->for_range.is_inclusive)
+            {
+                fprintf(out, "; %s <= ", node->for_range.var_name);
+            }
+            else
+            {
+                fprintf(out, "; %s < ", node->for_range.var_name);
+            }
         }
         codegen_expression(ctx, node->for_range.end, out);
         fprintf(out, "; %s", node->for_range.var_name);
@@ -1394,7 +1479,17 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
                     if (idx >= 0)
                     {
                         // Replace with %N
-                        dst += sprintf(dst, "%%%d", idx);
+#if defined(ZC_ARCH_ARM64)
+                        // Use most optimal register size on arm architectures
+                        if (node->asm_stmt.register_size <= 32)
+                        {
+                            dst += sprintf(dst, "%%w%d", idx);
+                        }
+                        else
+#endif
+                        {
+                            dst += sprintf(dst, "%%%d", idx);
+                        }
                     }
                     else
                     {
@@ -1512,8 +1607,57 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
     }
     case NODE_RETURN:
     {
+        // Suppress pending closure frees — returned closures escape the scope
+        pending_closure_free_count = 0;
         int has_defers = (defer_count > func_defer_boundary);
         int handled = 0;
+
+        if (node->ret.value && node->ret.value->type == NODE_EXPR_ARRAY_LITERAL &&
+            g_current_func_ret_type && strncmp(g_current_func_ret_type, "Slice_", 6) == 0)
+        {
+            // Heap allocation for slice literals to prevent use-after-return
+            ASTNode *arr = node->ret.value;
+            int count = arr->array_literal.count;
+            char *elem_type = "void*"; // fallback
+
+            // Prioritize the function return type (Slice_T) to determine the pointer type
+            // This prevents "incompatible pointer type" errors in C when returning literals of
+            // different types
+            if (g_current_func_ret_type && strncmp(g_current_func_ret_type, "Slice_", 6) == 0)
+            {
+                elem_type = xstrdup(g_current_func_ret_type + 6);
+            }
+            else if (arr->array_literal.elements && arr->array_literal.elements->type_info)
+            {
+                elem_type = codegen_type_to_string(arr->array_literal.elements->type_info);
+            }
+            else if (arr->type_info && arr->type_info->inner)
+            {
+                elem_type = codegen_type_to_string(arr->type_info->inner);
+            }
+            else
+            {
+                elem_type = xstrdup("void*");
+            }
+
+            fprintf(out, "    { %s *_tmp_arr = malloc(%d * sizeof(%s));\n", elem_type, count,
+                    elem_type);
+
+            ASTNode *elem = arr->array_literal.elements;
+            int idx = 0;
+            while (elem)
+            {
+                fprintf(out, "    _tmp_arr[%d] = ", idx++);
+                codegen_expression(ctx, elem, out);
+                fprintf(out, ";\n");
+                elem = elem->next;
+            }
+
+            fprintf(out, "    return (%s){.data = _tmp_arr, .len = %d, .cap = %d};\n",
+                    g_current_func_ret_type, count, count);
+            fprintf(out, "    }\n");
+            handled = 1;
+        }
 
         if (node->ret.value && node->ret.value->type == NODE_EXPR_VAR)
         {
@@ -1660,11 +1804,7 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
         if (strstr(ret_type, "*") == NULL && strcmp(ret_type, "string") != 0 &&
             strcmp(ret_type, "void") != 0 && strcmp(ret_type, "Async") != 0)
         {
-            if (strcmp(ret_type, "int") != 0 && strcmp(ret_type, "bool") != 0 &&
-                strcmp(ret_type, "char") != 0 && strcmp(ret_type, "float") != 0 &&
-                strcmp(ret_type, "double") != 0 && strcmp(ret_type, "long") != 0 &&
-                strcmp(ret_type, "usize") != 0 && strcmp(ret_type, "isize") != 0 &&
-                strncmp(ret_type, "uint", 4) != 0 && strncmp(ret_type, "int", 3) != 0)
+            if (is_struct_return_type(ret_type))
             {
                 returns_struct = 1;
             }
@@ -1697,7 +1837,7 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
             {
                 if (needs_long_cast)
                 {
-                    fprintf(out, "(%s)(long)_r; })", ret_type);
+                    fprintf(out, "(%s)(uintptr_t)_r; })", ret_type);
                 }
                 else
                 {
@@ -1797,6 +1937,30 @@ void codegen_node_single(ParserContext *ctx, ASTNode *node, FILE *out)
     default:
         codegen_expression(ctx, node, out);
         fprintf(out, ";\n");
+        // Suppress closure context free for Thread::spawn calls —
+        // the thread trampoline takes ownership of the closure context.
+        if (node->type == NODE_EXPR_CALL && node->call.callee && pending_closure_free_count > 0)
+        {
+            int is_thread_spawn = 0;
+            if (node->call.callee->type == NODE_EXPR_VAR && node->call.callee->var_ref.name &&
+                strstr(node->call.callee->var_ref.name, "Thread::spawn"))
+            {
+                is_thread_spawn = 1;
+            }
+            else if (node->call.callee->type == NODE_EXPR_MEMBER &&
+                     node->call.callee->member.target &&
+                     node->call.callee->member.target->type == NODE_EXPR_VAR &&
+                     strcmp(node->call.callee->member.target->var_ref.name, "Thread") == 0 &&
+                     strcmp(node->call.callee->member.field, "spawn") == 0)
+            {
+                is_thread_spawn = 1;
+            }
+            if (is_thread_spawn)
+            {
+                pending_closure_free_count = 0;
+            }
+        }
+        emit_pending_closure_frees(out);
         break;
     }
 }

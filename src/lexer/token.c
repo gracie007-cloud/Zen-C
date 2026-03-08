@@ -60,6 +60,11 @@ Token lexer_next(Lexer *l)
                 len += 2;
                 l->line++;
             }
+            else if (s[len] == '\\' && s[len + 1] == '\r' && s[len + 2] == '\n')
+            {
+                len += 3;
+                l->line++;
+            }
             else
             {
                 len++;
@@ -244,33 +249,70 @@ Token lexer_next(Lexer *l)
 
     if (s[0] == 'f' && s[1] == '"')
     {
-        int len = 2;
-        while (s[len] && s[len] != '"')
+        int is_multi = (s[2] == '"' && s[3] == '"');
+        int len = is_multi ? 4 : 2;
+        while (s[len])
         {
-            if (s[len] == '\\')
+            if (is_multi && s[len] == '"' && s[len + 1] == '"' && s[len + 2] == '"')
+            {
+                break;
+            }
+            else if (!is_multi && s[len] == '"')
+            {
+                break;
+            }
+
+            if (s[len] == '\\' && !is_multi)
             {
                 len++;
             }
             len++;
         }
-        if (s[len] == '"')
+        if (is_multi && s[len] == '"' && s[len + 1] == '"' && s[len + 2] == '"')
+        {
+            len += 3;
+        }
+        else if (!is_multi && s[len] == '"')
         {
             len++;
         }
+
+        for (int i = 0; i < len; i++)
+        {
+            if (s[i] == '\n')
+            {
+                l->line++;
+                l->col = 1;
+            }
+            else
+            {
+                l->col++;
+            }
+        }
         l->pos += len;
-        l->col += len;
         return (Token){TOK_FSTRING, s, len, start_line, start_col};
     }
 
-    // Raw Strings (r"..." or r'...')
+    // Raw Strings (r"..." or r'...' or r"""...""")
     if (s[0] == 'r' && (s[1] == '"' || s[1] == '\''))
     {
         char quote = s[1];
-        int len = 2;
+        int is_multi = (quote == '"' && s[2] == '"' && s[3] == '"');
+        int len = is_multi ? 4 : 2;
+
         // In raw strings, only escape the quote itself
-        while (s[len] && s[len] != quote)
+        while (s[len])
         {
-            if (s[len] == '\\' && s[len + 1] == quote)
+            if (is_multi && s[len] == '"' && s[len + 1] == '"' && s[len + 2] == '"')
+            {
+                break;
+            }
+            else if (!is_multi && s[len] == quote)
+            {
+                break;
+            }
+
+            if (s[len] == '\\' && s[len + 1] == quote && !is_multi)
             {
                 len += 2; // Skip escaped quote
             }
@@ -279,12 +321,28 @@ Token lexer_next(Lexer *l)
                 len++;
             }
         }
-        if (s[len] == quote)
+        if (is_multi && s[len] == '"' && s[len + 1] == '"' && s[len + 2] == '"')
+        {
+            len += 3;
+        }
+        else if (!is_multi && s[len] == quote)
         {
             len++;
         }
+
+        for (int i = 0; i < len; i++)
+        {
+            if (s[i] == '\n')
+            {
+                l->line++;
+                l->col = 1;
+            }
+            else
+            {
+                l->col++;
+            }
+        }
         l->pos += len;
-        l->col += len;
         return (Token){TOK_RAW_STRING, s, len, start_line, start_col};
     }
 
@@ -292,8 +350,13 @@ Token lexer_next(Lexer *l)
     if (isdigit(*s))
     {
         int len = 0;
+        int is_hex = 0;
+        int is_bin = 0;
+        int is_oct = 0;
+
         if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
         {
+            is_hex = 1;
             len = 2;
             while (isxdigit(s[len]))
             {
@@ -302,8 +365,18 @@ Token lexer_next(Lexer *l)
         }
         else if (s[0] == '0' && (s[1] == 'b' || s[1] == 'B'))
         {
+            is_bin = 1;
             len = 2;
             while (s[len] == '0' || s[len] == '1')
+            {
+                len++;
+            }
+        }
+        else if (s[0] == '0' && (s[1] == 'o' || s[1] == 'O'))
+        {
+            is_oct = 1;
+            len = 2;
+            while (s[len] >= '0' && s[len] <= '7')
             {
                 len++;
             }
@@ -314,31 +387,53 @@ Token lexer_next(Lexer *l)
             {
                 len++;
             }
+        }
+
+        if (!is_hex && !is_bin && !is_oct)
+        {
+            int is_float = 0;
             if (s[len] == '.')
             {
                 if (s[len + 1] != '.')
                 {
+                    is_float = 1;
                     len++;
                     while (isdigit(s[len]))
                     {
                         len++;
                     }
-                    // Consume float suffix (e.g. 1.0f)
-                    if (is_ident_start(s[len]))
-                    {
-                        while (is_ident_char(s[len]))
-                        {
-                            len++;
-                        }
-                    }
-                    l->pos += len;
-                    l->col += len;
-                    return (Token){TOK_FLOAT, s, len, start_line, start_col};
                 }
+            }
+
+            if (s[len] == 'e' || s[len] == 'E')
+            {
+                is_float = 1;
+                len++;
+                if (s[len] == '+' || s[len] == '-')
+                {
+                    len++;
+                }
+                while (isdigit(s[len]))
+                {
+                    len++;
+                }
+            }
+
+            if (is_float)
+            {
+                if (is_ident_start(s[len]))
+                {
+                    while (is_ident_char(s[len]))
+                    {
+                        len++;
+                    }
+                }
+                l->pos += len;
+                l->col += len;
+                return (Token){TOK_FLOAT, s, len, start_line, start_col};
             }
         }
 
-        // Consume integer suffix (e.g. 1u, 100u64, 1L)
         if (is_ident_start(s[len]))
         {
             while (is_ident_char(s[len]))
@@ -355,21 +450,47 @@ Token lexer_next(Lexer *l)
     // Strings
     if (*s == '"')
     {
-        int len = 1;
-        while (s[len] && s[len] != '"')
+        int is_multi = (s[1] == '"' && s[2] == '"');
+        int len = is_multi ? 3 : 1;
+        while (s[len])
         {
-            if (s[len] == '\\')
+            if (is_multi && s[len] == '"' && s[len + 1] == '"' && s[len + 2] == '"')
+            {
+                break;
+            }
+            else if (!is_multi && s[len] == '"')
+            {
+                break;
+            }
+
+            if (s[len] == '\\' && !is_multi)
             {
                 len++;
             }
             len++;
         }
-        if (s[len] == '"')
+        if (is_multi && s[len] == '"' && s[len + 1] == '"' && s[len + 2] == '"')
+        {
+            len += 3;
+        }
+        else if (!is_multi && s[len] == '"')
         {
             len++;
         }
+
+        for (int i = 0; i < len; i++)
+        {
+            if (s[i] == '\n')
+            {
+                l->line++;
+                l->col = 1;
+            }
+            else
+            {
+                l->col++;
+            }
+        }
         l->pos += len;
-        l->col += len;
         return (Token){TOK_STRING, s, len, start_line, start_col};
     }
 
@@ -398,7 +519,7 @@ Token lexer_next(Lexer *l)
 
     // Operators.
     int len = 1;
-    TokenType type = TOK_OP;
+    ZenTokenType type = TOK_OP;
 
     if (s[0] == '?' && s[1] == '.')
     {
@@ -470,17 +591,18 @@ Token lexer_next(Lexer *l)
         }
     }
     else if ((s[0] == '&' && s[1] == '&') || (s[0] == '|' && s[1] == '|') ||
-             (s[0] == '+' && s[1] == '+') || (s[0] == '-' && s[1] == '-'))
+             (s[0] == '+' && s[1] == '+') || (s[0] == '-' && s[1] == '-') ||
+             (s[0] == '*' && s[1] == '*'))
     {
         len = 2;
-    }
-    else if (s[1] == '=')
-    {
-        // This catches: == != <= >= += -= *= /= %= |= &= ^=
-        if (strchr("=!<>+-*/%|&^", s[0]))
+        if (s[0] == '*' && s[1] == '*' && s[2] == '=')
         {
-            len = 2;
+            len = 3;
         }
+    }
+    else if (s[1] == '=' && strchr("=!<>+-*/%|&^", s[0]))
+    {
+        len = 2;
     }
 
     else

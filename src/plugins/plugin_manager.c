@@ -1,6 +1,6 @@
 
 #include "plugin_manager.h"
-#include <dlfcn.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +14,8 @@ typedef struct PluginNode
 } PluginNode;
 
 static PluginNode *head = NULL;
+
+#include "../platform/os.h"
 
 void zptr_plugin_mgr_init(void)
 {
@@ -41,17 +43,17 @@ void zptr_register_plugin(ZPlugin *plugin)
 
 ZPlugin *zptr_load_plugin(const char *path)
 {
-    void *handle = dlopen(path, RTLD_LAZY);
+    void *handle = z_dlopen(path);
     if (!handle)
     {
         return NULL;
     }
 
-    ZPluginInitFn init_fn = (ZPluginInitFn)dlsym(handle, "z_plugin_init");
+    ZPluginInitFn init_fn = (ZPluginInitFn)z_dlsym(handle, "z_plugin_init");
     if (!init_fn)
     {
         fprintf(stderr, "Plugin '%s' missing 'z_plugin_init' symbol\n", path);
-        dlclose(handle);
+        z_dlclose(handle);
         return NULL;
     }
 
@@ -59,7 +61,7 @@ ZPlugin *zptr_load_plugin(const char *path)
     if (!plugin)
     {
         fprintf(stderr, "Plugin '%s' init returned NULL\n", path);
-        dlclose(handle);
+        z_dlclose(handle);
         return NULL;
     }
 
@@ -95,7 +97,7 @@ void zptr_plugin_mgr_cleanup(void)
         PluginNode *next = curr->next;
         if (curr->handle)
         {
-            dlclose(curr->handle);
+            z_dlclose(curr->handle);
         }
         free(curr);
         curr = next;

@@ -18,7 +18,7 @@
     <a href="#"><img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status"></a>
     <a href="#"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
     <a href="#"><img src="https://img.shields.io/github/v/release/z-libs/Zen-C?label=version&color=orange" alt="Version"></a>
-    <a href="#"><img src="https://img.shields.io/badge/platform-linux-lightgrey" alt="Platform"></a>
+    <a href="#"><img src="https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20macos-lightgrey" alt="Platform"></a>
   </p>
   <p><em>Write like a high-level language, run like C.</em></p>
 </div>
@@ -48,6 +48,14 @@ Join the discussion, share demos, ask questions, or report bugs in the official 
 
 - Discord: [Join here](https://discord.com/invite/q6wEsCmkJP)
 
+## Showcase
+
+Check out these projects built with Zen C:
+
+- **[ZC-pong-3ds](https://github.com/5quirre1/ZC-pong-3ds)**: A Pong clone for the Nintendo 3DS.
+- **[zen-c-parin](https://github.com/Kapendev/zen-c-parin)**: A basic example using Zen C with Parin.
+- **[almond](https://git.sr.ht/~leanghok/almond)**: A minimal web browser written in Zen C.
+
 ---
 
 ## Index
@@ -64,7 +72,11 @@ Join the discussion, share demos, ask questions, or report bugs in the official 
         <li><a href="#community">Community</a></li>
         <li><a href="#quick-start">Quick Start</a></li>
         <li><a href="#standard-library">Standard Library</a></li>
-        <li><a href="#tooling">Tooling</a></li>
+        <li><a href="#tooling">Tooling</a>
+          <ul>
+            <li><a href="#language-server-protocol-lsp">LSP</a></li>
+          </ul>
+        </li>
         <li><a href="#compiler-support--compatibility">Compiler Support & Compatibility</a></li>
         <li><a href="#contributing">Contributing</a></li>
         <li><a href="#attributions">Attributions</a></li>
@@ -103,9 +115,22 @@ Join the discussion, share demos, ask questions, or report bugs in the official 
 ```bash
 git clone https://github.com/z-libs/Zen-C.git
 cd Zen-C
+make clean # remove old build files
 make
 sudo make install
 ```
+
+### Windows
+
+Zen C has full native support for Windows (x86_64). You can build using the provided batch script with GCC (MinGW):
+
+```cmd
+build.bat
+```
+
+This will build the compiler (`zc.exe`). Networking, Filesystem, and Process operations are fully supported via the Platform Abstraction Layer (PAL).
+
+Alternatively, you can use `make` if you have a Unix-like environment (MSYS2, Cygwin, git-bash).
 
 ### Portable Build (APE)
 
@@ -202,6 +227,11 @@ let y: const int = 10;  // Read-only (Type qualified)
 | `U0`, `u0`, `void` | `void` | Empty type |
 | `iN` (for example, `i256`) | `_BitInt(N)` | Arbitrary bit-width signed integer (C23) |
 | `uN` (for example, `u42`) | `unsigned _BitInt(N)` | Arbitrary bit-width unsigned integer (C23) |
+
+#### Literals
+- **Integers**: Decimal (`123`), Hex (`0xFF`), Octal (`0o755`), Binary (`0b1011`).
+  - *Note*: Numbers with leading zeros are treated as decimal (`0123` is `123`), unlike C.
+- **Floats**: Standard (`3.14`), Scientific (`1e-5`, `1.2E3`).
 
 > [!IMPORTANT]
 > **Best Practices for Portable Code**
@@ -318,6 +348,20 @@ union Data {
 }
 ```
 
+#### SIMD Vectors
+Native SIMD vector types using GCC/Clang vector extensions. Annotate a struct with `@vector(N)` to define a vector of N elements.
+```zc
+import "std/simd.zc";
+
+fn main() {
+    let a = f32x4{v: 1.0};              // Broadcast: {1.0, 1.0, 1.0, 1.0}
+    let b = f32x4{1.0, 2.0, 3.0, 4.0};  // Per-element init
+    let c = a + b;                       // Element-wise addition
+    let x = c[0];                        // Element access (float)
+}
+```
+Arithmetic (`+`, `-`, `*`, `/`) and bitwise (`&`, `|`, `^`) operators work element-wise. See [`std/simd.zc`](std/simd.zc) for predefined types.
+
 #### Type Aliases
 Create a new name for an existing type.
 ```zc
@@ -400,13 +444,32 @@ fn main() {
 Anonymous functions that can capture their environment.
 ```zc
 let factor = 2;
-let double = x -> x * factor;  // Arrow syntax
+let doubler = x -> x * factor;  // Arrow syntax
 let full = fn(x: int) -> int { return x * factor; }; // Block syntax
+
+// Capture by Reference (Block Syntax)
+let val = 10;
+let modify = fn[&]() { val += 1; }; 
+modify(); // val is now 11
+
+// Capture by Reference (Arrow Syntax)
+let modify_arrow = [&] x -> val += x;
+modify_arrow(5); // val is now 16
+
+// Capture by Reference (Arrow Syntax with Multiple Arguments)
+let sum_into = [&] (a, b) -> val += (a + b);
+sum_into(2, 2); // val is now 20
+
+// Capture by Value (Default)
+let original = 100;
+let implicit = x -> original + x;       // Implicit capture by value (no brackets)
+let explicit = [=] x -> original + x;   // Explicit capture by value
+// let fail = x -> original += x;       // Error: cannot assign to captured value
+
 ```
 
 #### Raw Function Pointers
 Zen C supports raw C function pointers using the `fn*` syntax. This allows seamless interop with C libraries that expect function pointers without closure overhead.
-
 ```zc
 // Function taking a raw function pointer
 fn set_callback(cb: fn*(int)) {
@@ -496,6 +559,7 @@ for i in 0..10 { ... }      // Exclusive (0 to 9)
 for i in 0..<10 { ... }     // Exclusive (Explicit)
 for i in 0..=10 { ... }     // Inclusive (0 to 10)
 for i in 0..10 step 2 { ... }
+for i in 10..0 step -1 { ... }  // Descending loop
 
 // Iterator (Vec or custom Iterable)
 for item in vec { ... }
@@ -536,7 +600,7 @@ Zen C supports operator overloading for user-defined structs by implementing spe
 
 | Category | Operator | Method Name |
 |:---|:---|:---|
-| **Arithmetic** | `+`, `-`, `*`, `/`, `%` | `add`, `sub`, `mul`, `div`, `rem` |
+| **Arithmetic** | `+`, `-`, `*`, `/`, `%`, `**` | `add`, `sub`, `mul`, `div`, `rem`, `pow` |
 | **Comparison** | `==`, `!=` | `eq`, `neq` |
 | | `<`, `>`, `<=`, `>=` | `lt`, `gt`, `le`, `ge` |
 | **Bitwise** | `&`, `\|`, `^` | `bitand`, `bitor`, `bitxor` |
@@ -602,9 +666,11 @@ Zen C allows you to use string literals directly as statements for quick printin
 | `!"Err"` | `eprintln "Err"` | Prints to `stderr` with newline. |
 | `!"Err"..` | `eprint "Err"` | Prints to `stderr` without newline. |
 
-#### String Interpolation (F-strings)
+#### String Interpolation
 
 You can embed expressions directly into string literals using `{}` syntax. This works with all printing methods and string shorthands.
+
+String interpolation in Zen C is **implicit**: if your string contains `{...}`, it will automatically be parsed as an interpolated string. You can also explicitly prefix a string with `f` (e.g., `f"..."`) to force interpolation semantics.
 
 ```zc
 let x = 42;
@@ -618,6 +684,39 @@ println "Value: {x}, Name: {name}";
 ```zc
 let json = "JSON: {{\"key\": \"value\"}}";
 // Output: JSON: {"key": "value"}
+```
+
+**Raw Strings**: To define a string where interpolation and escape sequences are completely ignored, prefix it with `r` (e.g., `r"..."`):
+
+```zc
+let regex = r"\w+"; // Contains exactly \ w +
+let raw_json = r'{"key": "value"}'; // No brace escaping needed
+```
+
+#### Multiline Strings
+
+Zen C supports raw multiline string blocks using the `"""` delimiter. This is extremely useful for writing embedded languages (GLSL, HTML) or generating C-code in `comptime` blocks without manually escaping newlines and interior quotes.
+
+Like standard strings, multiline strings support **implicit interpolation**. You can also explicitly prefix them:
+- `f"""..."""`: Explicitly marks it as an interpolated string block.
+- `r"""..."""`: Explicitly marks it as a raw string block (no interpolation, no escape sequences).
+
+```zc
+let prompt = """
+  Please enter your name:
+  Type "exit" to cancel.
+""";
+
+let world = "world";
+let script = """
+  fn hello() {
+      println "hello, {world}!";
+  }
+""";
+
+let pure_raw = r"""
+  Here {braces} are just text, and \n is literally slash-n.
+""";
 ```
 
 #### Input Prompts (`?`)
@@ -934,7 +1033,7 @@ println "Build Date: {build_date}";
 ```
 
 <details>
-<summary><b>🔧 Helper Functions</b></summary>
+<summary><b>Helper Functions</b></summary>
 
 Special functions available inside `comptime` blocks for code generation and diagnostics:
 
@@ -953,11 +1052,11 @@ Special functions available inside `comptime` blocks for code generation and dia
 </tr>
 <tr>
 <td><code>compile_error(msg)</code></td>
-<td>❌ Halt compilation with a fatal error message</td>
+<td>Halt compilation with a fatal error message</td>
 </tr>
 <tr>
 <td><code>compile_warn(msg)</code></td>
-<td>⚠️ Emit a compile-time warning (allows compilation to continue)</td>
+<td>Emit a compile-time warning (allows compilation to continue)</td>
 </tr>
 </table>
 
@@ -1011,7 +1110,8 @@ println "Running on: {PLATFORM}";
 ```
 </details>
 
-> **💡 Tip:** Use raw strings (`r"..."`) in comptime to avoid escaping braces: `code(r"fn test() { return 42; }")`. Otherwise, use `{{` and `}}` to escape braces inside regular strings.
+> [!TIP]
+> Use raw strings (`r"..."`) in comptime to avoid escaping braces: `code(r"fn test() { return 42; }")`. Otherwise, use `{{` and `}}` to escape braces inside regular strings.
 
 
 #### Embed
@@ -1042,6 +1142,37 @@ Pass preprocessor macros through to C.
 #define MAX_BUFFER 1024
 ```
 
+#### Conditional Compilation
+Use `@cfg()` to conditionally include or exclude any top-level declaration based on `-D` flags.
+
+```zc
+// Build with: zc build app.zc -DUSE_OPENGL
+
+@cfg(USE_OPENGL)
+import "opengl_backend.zc";
+
+@cfg(USE_VULKAN)
+import "vulkan_backend.zc";
+
+// OR: include if any backend is selected
+@cfg(any(USE_OPENGL, USE_VULKAN))
+fn init_graphics() { /* ... */ }
+
+// AND with negation
+@cfg(not(USE_OPENGL))
+@cfg(not(USE_VULKAN))
+fn fallback_init() { println "No backend selected"; }
+```
+
+| Form | Meaning |
+|:---|:---|
+| `@cfg(NAME)` | Include if `-DNAME` is set |
+| `@cfg(not(NAME))` | Include if `-DNAME` is NOT set |
+| `@cfg(any(A, B, ...))` | Include if ANY condition is true (OR) |
+| `@cfg(all(A, B, ...))` | Include if ALL conditions are true (AND) |
+
+Multiple `@cfg` on one declaration are ANDed. `not()` can be used inside `any()` and `all()`. Works on any top-level declaration: `fn`, `struct`, `import`, `impl`, `raw`, `def`, `test`, etc.
+
 ### 13. Attributes
 
 Decorate functions and structs to modify compiler behavior.
@@ -1068,6 +1199,7 @@ Decorate functions and structs to modify compiler behavior.
 | `@device` | Fn | CUDA: Device function (`__device__`). |
 | `@host` | Fn | CUDA: Host function (`__host__`). |
 | `@comptime` | Fn | Helper function available for compile-time execution. |
+| `@cfg(NAME)` | Any | Conditional compilation: include only if `-DNAME` is passed. Supports `not()`, `any()`, `all()`. |
 | `@derive(...)` | Struct | Auto-implement traits. Supports `Debug`, `Eq` (Smart Derive), `Copy`, `Clone`. |
 | `@ctype("type")` | Fn Param | Overrides generated C type for a parameter. |
 | `@<custom>` | Any | Passes generic attributes to C (e.g. `@flatten`, `@alias("name")`). |
@@ -1292,6 +1424,8 @@ Zen C includes a standard library (`std`) covering essential functionality.
 | **`std/stack.zc`** | LIFO Stack `Stack<T>`. | [Docs](docs/std/stack.md) |
 | **`std/set.zc`** | Generic Hash Set `Set<T>`. | [Docs](docs/std/set.md) |
 | **`std/process.zc`** | Process execution and management. | [Docs](docs/std/process.md) |
+| **`std/regex.zc`** | Regular Expressions (TRE based). | [Docs](docs/std/regex.md) |
+| **`std/simd.zc`** | Native SIMD vector types. | [Docs](docs/std/simd.md) |
 
 </details>
 
@@ -1363,6 +1497,15 @@ zc repl
 ---
 
 
+### Language Server Protocol (LSP)
+
+Zen C includes a built-in Language Server for editor integration.
+
+- **[Installation & Setup Guide](docs/LSP.md)**
+- **Supported Editors**: VS Code, Neovim, Vim, Zed, and any LSP-capable editor.
+
+Use `zc lsp` to start the server.
+
 ## Compiler Support & Compatibility
 
 Zen C is designed to work with most C11 compilers. Some features rely on GNU C extensions, but these often work in other compilers. Use the `--cc` flag to switch backends.
@@ -1382,12 +1525,12 @@ zc run app.zc --cc zig
 | **GCC** | **100% (Full)** | All Features | None. |
 | **Clang** | **100% (Full)** | All Features | None. |
 | **Zig** | **100% (Full)** | All Features | None. Uses `zig cc` as a drop-in C compiler. |
-| **TCC** | **~70% (Basic)** | Basic Syntax, Generics, Traits | No `__auto_type`, No Intel ASM, No Nested Functions. |
+| **TCC** | **98% (High)** | Structs, Generics, Traits, Pattern Matching | No Intel ASM, No `__attribute__((constructor))`. |
 
 </details>
 
-> [!TIP]
-> **Recommendation:** Use **GCC**, **Clang**, or **Zig** for production builds. TCC is excellent for rapid prototyping due to its compilation speed but misses some advanced C extensions Zen C relies on for full feature support.
+> [!WARNING]
+> **COMPILER BUILD WARNING:** While **Zig CC** works excellently as a backend for your Zen C programs, building the *Zen C compiler itself* with it may verify but produce an unstable binary that fails tests. We recommend building the compiler with **GCC** or **Clang** and using Zig only as a backend for your operational code.
 
 ### Building with Zig
 
@@ -1595,6 +1738,7 @@ This project uses third-party libraries. Full license texts can be found in the 
 *   **[cJSON](https://github.com/DaveGamble/cJSON)** (MIT License): Used for JSON parsing and generation in the Language Server.
 *   **[zc-ape](https://github.com/OEvgeny/zc-ape)** (MIT License): The original Actually Portable Executable port of Zen-C by [Eugene Olonov](https://github.com/OEvgeny).
 *   **[Cosmopolitan Libc](https://github.com/jart/cosmopolitan)** (ISC License): The foundational library that makes APE possible.
+*   **[TRE](https://github.com/laurikari/tre)** (BSD License): Used for the regular expression engine in the standard library.
 
 ---
 

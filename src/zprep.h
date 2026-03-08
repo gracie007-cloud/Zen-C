@@ -2,31 +2,8 @@
 #ifndef ZPREP_H
 #define ZPREP_H
 
-#include <ctype.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-#ifdef __COSMOPOLITAN__
-#include <cosmo.h>
-#define z_is_windows() IsWindows() ///< Check if running on Windows.
-#else
-#ifdef _WIN32
-#define z_is_windows() 1
-#else
-#define z_is_windows() 0
-#endif
-#endif
-
-#ifdef _WIN32
-#include <sys/types.h>
-#ifndef PATH_MAX
-#define PATH_MAX 260
-#endif
-#define realpath(N, R) _fullpath((R), (N), PATH_MAX) ///< Get absolute path.
-#endif
+#include "platform/lang.h"
+#include "platform/os.h"
 
 // **ZEN VERSION**
 #ifndef ZEN_VERSION
@@ -105,14 +82,14 @@ typedef enum
     TOK_COMMENT,    ///< Comment (usually skipped).
     TOK_OPAQUE,     ///< 'opaque' keyword.
     TOK_UNKNOWN     ///< Unknown token.
-} TokenType;
+} ZenTokenType;
 
 /**
  * @brief Represents a source token.
  */
 typedef struct
 {
-    TokenType type;    ///< Type of the token.
+    ZenTokenType type; ///< Type of the token.
     const char *start; ///< Pointer to start of token in source buffer.
     int len;           ///< Length of the token text.
     int line;          ///< Line number (1-based).
@@ -164,22 +141,22 @@ int is_trait(const char *name);
 /**
  * @brief Allocate memory.
  */
-void *xmalloc(size_t size);
+void *xmalloc(size_t size) __attribute__((returns_nonnull));
 
 /**
  * @brief Reallocate memory.
  */
-void *xrealloc(void *ptr, size_t new_size);
+void *xrealloc(void *ptr, size_t new_size) __attribute__((returns_nonnull));
 
 /**
  * @brief Allocate and zero memory.
  */
-void *xcalloc(size_t n, size_t size);
+void *xcalloc(size_t n, size_t size) __attribute__((returns_nonnull));
 
 /**
  * @brief Duplicate a string.
  */
-char *xstrdup(const char *s);
+char *xstrdup(const char *s) __attribute__((returns_nonnull));
 
 /**
  * @brief Load a file.
@@ -216,8 +193,12 @@ int levenshtein(const char *s1, const char *s2);
  */
 typedef struct
 {
-    char *input_file;  ///< Input source file path.
-    char *output_file; ///< Output binary file path.
+    char *input_file;      ///< Input source file path.
+    char *extra_files[64]; ///< Additional input files.
+    int extra_file_count;  ///< Number of extra input files.
+    char *c_files[64];     ///< Additional C/C++/OBJ files to be passed directly to backend.
+    int c_file_count;      ///< Number of C/C++/OBJ files.
+    char *output_file;     ///< Output binary file path.
 
     // Modes.
     int mode_run;        ///< 1 if 'run' command (compile & execute).
@@ -234,7 +215,7 @@ typedef struct
     int use_objc;        ///< 1 if --objc (emit Objective-C compatible code).
     int mode_lsp;        ///< 1 if 'lsp' command (Language Server Protocol).
     int json_output;     ///< 1 if --json (emit structured JSON diagnostics).
-    int no_typecheck;    ///< 1 if --no-typecheck (disable semantic analysis).
+    int use_typecheck;   ///< 1 if --typecheck (enable manual semantic analysis).
 
     int keep_comments; ///< 1 if --keep-comments (preserve comments in output).
 
@@ -243,6 +224,16 @@ typedef struct
 
     // C Compiler selection (default: gcc)
     char cc[64]; ///< Backend compiler command (e.g. "gcc", "clang").
+
+    char **c_function_whitelist; ///< List of C functions to suppress warnings for (from zenc.json).
+
+    // User-defined -D flags tracked for @cfg() evaluation.
+    char *cfg_defines[64]; ///< Define names from -D flags.
+    int cfg_define_count;  ///< Number of tracked -D defines.
+
+    // User-defined -I flags tracked for import resolution.
+    char *include_paths[64]; ///< Include paths for module resolution.
+    int include_path_count;  ///< Number of tracked -I paths.
 } CompilerConfig;
 
 extern CompilerConfig g_config;
@@ -254,40 +245,14 @@ struct ParserContext;
 /**
  * @brief Scan build directives.
  */
+/**
+ * @brief Scan build directives.
+ */
 void scan_build_directives(struct ParserContext *ctx, const char *src);
 
 /**
- * @brief Get monotonic time in seconds (high precision).
+ * @brief Load all configurations (system, hidden project, visible project).
  */
-double z_get_monotonic_time(void);
-
-/**
- * @brief Get wall clock time in seconds.
- */
-double z_get_time(void);
-
-/**
- * @brief Setup terminal (enable ANSI colors on Windows).
- */
-void z_setup_terminal(void);
-
-/**
- * @brief Get temporary directory path.
- * Windows: %TEMP% or C:\Windows\Temp
- * POSIX: /tmp
- * @return Path string (do not free).
- */
-const char *z_get_temp_dir(void);
-
-/**
- * @brief Get current process ID.
- * @return PID.
- */
-int z_get_pid(void);
-
-/**
- * @brief Check if file descriptor refers to a terminal.
- */
-int z_isatty(int fd);
+void load_all_configs(void);
 
 #endif
